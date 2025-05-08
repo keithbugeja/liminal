@@ -17,15 +17,15 @@ pub trait InputSourceHandler: Send + Sync {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 }
 
-pub fn create_input_source_handler(
+pub fn create_input_source(
     name: &str,
-    source: &InputSource,
+    config: &InputSource,
 ) -> Result<Box<dyn InputSourceHandler>, String> {
-    match source.kind.as_str() {
-        "mqtt" => Ok(Box::new(mqtt::MqttInputSource::new(name, source)?)),
+    match config.kind.as_str() {
+        "mqtt" => Ok(Box::new(mqtt::MqttInputSource::new(name, config)?)),
         "simulated" => Ok(Box::new(simulated::SimulatedInputSource::new(
-            name, source,
+            name, config,
         )?)),
-        _ => Err(format!("Unsupported input source: {}", source.kind)),
+        _ => Err(format!("Unsupported input source: {}", config.kind)),
     }
 }

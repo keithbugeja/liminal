@@ -10,12 +10,12 @@ pub trait OutputSinkHandler: Send + Sync {
     async fn handle(&self, message: Message);
 }
 
-pub fn create_output_sink_handler(
+pub fn create_output_sink(
     name: &str,
-    def: &OutputSink,
+    config: &OutputSink,
 ) -> Result<Box<dyn OutputSinkHandler>, String> {
-    match def.kind.as_str() {
+    match config.kind.as_str() {
         "log" => Ok(Box::new(log::LogSink::new(name))),
-        _ => Err(format!("Unknown sink kind '{}'", def.kind)),
+        _ => Err(format!("Unknown sink kind '{}'", config.kind)),
     }
 }

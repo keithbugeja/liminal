@@ -1,14 +1,12 @@
+mod aggregation;
 mod config;
 mod input;
 mod logging;
+mod message;
 mod sink;
 mod transform;
 
-mod message;
-
 use std::sync::Arc;
-
-use input::create_input_source_handler;
 use tracing::{error, info};
 
 #[tokio::main]
@@ -42,13 +40,13 @@ async fn main() {
     let (tx_transformed, mut rx_transformed) = tokio::sync::mpsc::channel::<message::Message>(64);
     let mut handles = vec![];
 
-    for (name, input_def) in &config.input_sources {
+    for (name, config_input) in &config.input_sources {
         let name = name.clone();
-        let input_def = input_def.clone();
+        let config_input = config_input.clone();
         let tx = tx_input.clone();
         let shutdown = tx_shutdown.subscribe();
 
-        match create_input_source_handler(&name, &input_def) {
+        match input::create_input_source(&name, &config_input) {
             Ok(handler) => {
                 let handle = tokio::spawn(async move {
                     if let Err(e) = handler.run(tx, shutdown).await {
@@ -61,10 +59,10 @@ async fn main() {
         }
     }
 
-    let transforms: Vec<Box<dyn transform::Transform>> = config
-        .transformations
-        .values()
-        .map(|t| transform::create_transform(&t.kind, &t.parameters).expect("invalid transform"))
+    let transforms: Vec<Box<dyn transform::Transformer>> = config
+        .transforms
+        .iter()
+        .map(|(name, t)| transform::create_transform(name, t).expect("invalid transform"))
         .collect();
 
     let tx_sinks = tx_transformed.clone();
@@ -93,7 +91,9 @@ async fn main() {
     let sinks: Vec<Box<dyn sink::OutputSinkHandler>> = config
         .output_sinks
         .iter()
-        .map(|(name, def)| sink::create_output_sink_handler(name, def).expect("invalid sink"))
+        .map(|(name, config_sink)| {
+            sink::create_output_sink(name, config_sink).expect("invalid sink")
+        })
         .collect();
 
     tokio::spawn(async move {

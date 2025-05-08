@@ -1,46 +1,22 @@
-# Input sources
-[input_sources]
-[input_sources.vibration_sensor]
-kind = "mqtt"
-topic = "sensors/vibration"
-parameters = { sampling_rate = 100 }
-
-[input_sources.robot_arm]
-kind = "mqtt"
-topic = "sensors/robot_arm"
-
-[input_sources.sim]
+# Input Sources
+[input_sources.sensor_a]
 kind = "simulated"
-topic = "sensors/test"
-parameters = { interval_ms = 500 }
+topic = "sensors/a"
+parameters = { interval_ms = 100 }
 
-[input_sources.sim2]
+[input_sources.sensor_b]
 kind = "simulated"
-topic = "sensors/test2"
-parameters = { interval_ms = 250 }
+topic = "sensors/b"
+parameters = { interval_ms = 100 }
 
-# Transformations
-[transformations]
-[transformarions.passthrough]
+[transforms.passthrough]
 kind = "passthrough"
-# [transformations.basic_filter]
-#kind = "low-pass"
-# parameters = { threshold = 0.5 }
 
-# [transformations.aggregator]
-# kind = "moving_average"
-# parameters = { window_size = 10 }
+[aggregations.fusion]
+kind = "fusion"
+inputs = ["sensor_a", "sensor_b"]
+parameters = { method = "weighted_average", weight_a = 0.6, weight_b = 0.4 }
 
-# Aggregations
-[aggregations]
-[aggregations.max]
-kind = "max"
-inputs = ["vibration_sensor", "robot_arm"]
-
-# Output sinks
-[output_sinks]
-[output_sinks.logger]
+[output_sinks.main]
 kind = "log"
-#[output_sinks.main]
-#kind = "json"
-#destination = "broker://output"
+routes = ["fusion"]
