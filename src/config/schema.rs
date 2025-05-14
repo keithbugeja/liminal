@@ -3,36 +3,50 @@ use std::collections::HashMap;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct Config {
-    pub input_sources: HashMap<String, InputSource>,
-    pub transforms: HashMap<String, Transform>,
-    pub aggregations: HashMap<String, Aggregation>,
-    pub output_sinks: HashMap<String, OutputSink>,
+    pub inputs: HashMap<String, StageConfig>,
+    pub pipelines: HashMap<String, PipelineConfig>,
+    pub outputs: HashMap<String, StageConfig>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct InputSource {
-    pub kind: String,
-    pub topic: String,
-    pub parameters: Option<std::collections::HashMap<String, serde_json::Value>>,
+pub struct StageConfig {
+    #[serde(rename = "type")]
+    pub r#type: String,
+    pub inputs: Option<Vec<String>>,
+    pub output: Option<String>,
+    pub channel: Option<ChannelConfig>,
+    pub parameters: Option<HashMap<String, serde_json::Value>>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct Transform {
-    pub kind: String,
-    pub parameters: Option<std::collections::HashMap<String, serde_json::Value>>,
+pub struct ChannelConfig {
+    #[serde(rename = "type", default = "default_channel_type")]
+    pub r#type: ChannelType,
+    #[serde(default = "default_capacity")]
+    pub capacity: usize,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct Aggregation {
-    pub kind: String,
-    pub inputs: Vec<String>,
-    pub parameters: Option<std::collections::HashMap<String, serde_json::Value>>,
+#[serde(rename_all = "lowercase")]
+pub enum ChannelType {
+    Broadcast,
+    Mpsc,
+    Flume,
+    Fanout,
+}
+
+fn default_channel_type() -> ChannelType {
+    ChannelType::Broadcast
+}
+
+fn default_capacity() -> usize {
+    128
 }
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct OutputSink {
-    pub kind: String,
-    pub parameters: Option<std::collections::HashMap<String, serde_json::Value>>,
+pub struct PipelineConfig {
+    pub description: String,
+    pub stages: HashMap<String, StageConfig>,
 }
 
 pub fn extract_param<T>(

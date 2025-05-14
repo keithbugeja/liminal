@@ -1,26 +1,39 @@
 use super::schema::*;
 
 pub fn validate_config(config: &Config) -> Result<(), String> {
-    // Validate aggregations reference existing input sources
-    for (name, aggregation) in &config.aggregations {
-        for input in &aggregation.inputs {
-            if !config.input_sources.contains_key(input) {
-                return Err(format!(
-                    "Aggregation '{}' references unknown input source '{}'",
-                    name, input
-                ));
-            }
-        }
-
-        if aggregation.inputs.is_empty() {
-            return Err(format!(
-                "Aggregation '{}' must have at least one input source",
-                name
-            ));
-        }
+    if config.inputs.is_empty() {
+        return Err("No input sources defined".into());
     }
 
-    // Additional checks
+    if config.pipelines.is_empty() {
+        return Err("No pipeline stages defined".into());
+    }
+
+    if config.outputs.is_empty() {
+        return Err("No output sources defined".into());
+    }
+
+    // for (pipeline_name, pipeline) in &config.pipelines {
+    //     let mut available_outputs = config.inputs.keys().cloned().collect::<Vec<String>>();
+
+    //     for (stage_name, stage) in &pipeline.stages {
+    //         if let Some(inputs) = &stage.inputs {
+    //             for input in inputs {
+    //                 if !available_outputs.contains(input) {
+    //                     println!("Available outputs: {:?}", available_outputs);
+    //                     return Err(format!(
+    //                         "Pipeline '{}' stage '{}' references unknown input source '{}'",
+    //                         pipeline_name, stage_name, input
+    //                     ));
+    //                 }
+    //             }
+    //         }
+
+    //         if let Some(output) = &stage.output {
+    //             available_outputs.push(output.clone());
+    //         }
+    //     }
+    // }
 
     Ok(())
 }

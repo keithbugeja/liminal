@@ -8,7 +8,7 @@ use tracing::{error, info};
 
 use super::InputSourceHandler;
 use crate::config::InputSource;
-use crate::message::Message;
+use crate::core::message::Message;
 
 pub struct SimulatedInputSource {
     name: String,

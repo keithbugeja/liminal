@@ -1,6 +1,6 @@
 use crate::aggregation::Aggregator;
 use crate::config::extract_param;
-use crate::message::Message;
+use crate::core::message::Message;
 use async_trait::async_trait;
 use serde_json::json;
 use std::collections::HashMap;

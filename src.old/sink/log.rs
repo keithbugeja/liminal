@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use tracing::info;
 
 use super::OutputSinkHandler;
-use crate::message::Message;
+use crate::core::message::Message;
 
 pub struct LogSink {
     pub name: String,
