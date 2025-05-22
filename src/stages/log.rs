@@ -1,24 +1,22 @@
 use crate::config::StageConfig;
-use crate::core::message::Message;
-use crate::stages::{Input, Stage};
+use crate::core::{
+    channel::{PubSubChannel, Subscriber},
+    message::Message,
+};
+use crate::stages::Stage;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 pub struct LogOutputStage {
     name: String,
+    input: Option<Subscriber<Message>>,
 }
 
 impl LogOutputStage {
     pub fn new(name: &str, config: StageConfig) -> Box<dyn Stage> {
-        // let threshold = config
-        //     .parameters
-        //     .as_ref()
-        //     .and_then(|p| p.get("threshold"))
-        //     .and_then(|v| v.as_f64())
-        //     .unwrap_or(0.5);
-
         Box::new(Self {
             name: name.to_string(),
-            // threshold,
+            input: None,
         })
     }
 }
@@ -29,15 +27,26 @@ impl Stage for LogOutputStage {
         self.name.as_str()
     }
 
-    fn attach_input(&mut self, input: Input<Message>) {}
+    fn add_input(&mut self, input: Subscriber<Message>) {
+        self.input = Some(input);
+
+        tracing::info!("Log output stage [{}] input set", self.name);
+    }
+
+    fn add_output(&mut self, _output: Arc<dyn PubSubChannel<Message>>) {}
 
     async fn init(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn run(self: Box<Self>) -> anyhow::Result<()> {
+    async fn run(&mut self) -> anyhow::Result<()> {
         tracing::info!("Log output stage is running");
 
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        tracing::info!("Log output stage is stopping");
         Ok(())
     }
 }

@@ -1,11 +1,14 @@
 use crate::config::StageConfig;
+use crate::core::channel::{PubSubChannel, Subscriber};
 use crate::core::message::Message;
-use crate::stages::{Input, Stage};
+use crate::stages::Stage;
 use async_trait::async_trait;
+use std::sync::{Arc, RwLock};
 
 pub struct SimulatedInputStage {
     name: String,
     interval_ms: u64,
+    output: Option<Arc<dyn PubSubChannel<Message>>>,
 }
 
 impl SimulatedInputStage {
@@ -20,6 +23,7 @@ impl SimulatedInputStage {
         Box::new(Self {
             name: name.to_string(),
             interval_ms,
+            output: None,
         })
     }
 }
@@ -30,49 +34,28 @@ impl Stage for SimulatedInputStage {
         self.name.as_str()
     }
 
-    fn attach_input(&mut self, input: Input<Message>) {}
+    fn add_input(&mut self, _input: Subscriber<Message>) {
+        todo!()
+    }
+
+    fn add_output(&mut self, output: Arc<dyn PubSubChannel<Message>>) {
+        self.output = Some(output);
+
+        tracing::info!("Simulated input stage [{}] output set", self.name);
+    }
 
     async fn init(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn run(self: Box<Self>) -> anyhow::Result<()> {
+    async fn run(&mut self) -> anyhow::Result<()> {
         tracing::info!("Simulated input stage is running");
 
         Ok(())
     }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        tracing::info!("Simulated input stage is stopping");
+        Ok(())
+    }
 }
-
-// use super::stage::Stage;
-// use crate::core::message::Message;
-// use std::time::{SystemTime, UNIX_EPOCH};
-// use tracing::{error, info};
-
-// pub struct SimulatedInputSource {
-//     name: String,
-//     interval_ms: u64,
-// }
-
-// impl SimulatedInputSource {
-//     pub fn new(name: &str, config: &StageConfig) -> Result<Self, String> {
-//         Self::new(name, 100)
-//     }
-// }
-
-// impl Stage for SimulatedInputSource {
-//     fn name(&self) -> &str {
-//         &self.name
-//     }
-
-//     fn attach_input(&mut self, _input: Input<Message>) {
-//         // No input to attach for simulated input
-//     }
-
-//     async fn init(&mut self) -> anyhow::Result<()> {
-//         Ok(())
-//     }
-
-//     async fn run(self: Box<Self>) -> anyhow::Result<()> {
-//         tracing::info!("Simulated input source [{}] is running", self.name);
-//     }
-// }

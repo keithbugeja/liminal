@@ -8,4 +8,4 @@ pub mod factory;
 pub mod stage;
 
 // pub use factory::all_stage_factories;
-pub use stage::{Input, Stage};
+pub use stage::Stage;

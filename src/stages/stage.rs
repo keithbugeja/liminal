@@ -1,17 +1,17 @@
+use crate::core::channel::PubSubChannel;
+use crate::core::channel::Subscriber;
 use crate::core::message::Message;
 use async_trait::async_trait;
-
-pub enum Input<Message> {
-    Broadcast(tokio::sync::broadcast::Receiver<Message>),
-    Mpsc(tokio::sync::mpsc::Receiver<Message>),
-}
+use std::sync::Arc;
 
 #[async_trait]
 pub trait Stage: Send + Sync {
     fn name(&self) -> &str;
 
-    fn attach_input(&mut self, input: Input<Message>);
-
     async fn init(&mut self) -> anyhow::Result<()>;
-    async fn run(self: Box<Self>) -> anyhow::Result<()>;
+    async fn run(&mut self) -> anyhow::Result<()>;
+    async fn stop(&mut self) -> anyhow::Result<()>;
+
+    fn add_input(&mut self, input: Subscriber<Message>);
+    fn add_output(&mut self, output: Arc<dyn PubSubChannel<Message>>);
 }

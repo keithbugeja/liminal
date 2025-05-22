@@ -2,7 +2,7 @@
 [inputs.random_temp]
 type = "simulated"
 output = "raw_temp_data"
-channel = { type = "mpsc", capacity = 100 }
+channel = { type = "direct", capacity = 100 }
 parameters = { type = "random", min = -10, max = 40, interval = 1000 }
 
 [inputs.sine_wave]

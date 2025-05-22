@@ -1,11 +1,15 @@
 use crate::config::StageConfig;
+use crate::core::channel::{PubSubChannel, Subscriber};
 use crate::core::message::Message;
-use crate::stages::{Input, Stage};
+use crate::stages::Stage;
 use async_trait::async_trait;
+use std::sync::Arc;
 
 pub struct LowPassFilterStage {
     name: String,
     threshold: f64,
+    input: Option<Subscriber<Message>>,
+    output: Option<Arc<dyn PubSubChannel<Message>>>,
 }
 
 impl LowPassFilterStage {
@@ -20,6 +24,8 @@ impl LowPassFilterStage {
         Box::new(Self {
             name: name.to_string(),
             threshold,
+            input: None,
+            output: None,
         })
     }
 }
@@ -30,15 +36,30 @@ impl Stage for LowPassFilterStage {
         self.name.as_str()
     }
 
-    fn attach_input(&mut self, input: Input<Message>) {}
+    fn add_input(&mut self, input: Subscriber<Message>) {
+        self.input = Some(input);
+
+        tracing::info!("Lowpass stage [{}] input set", self.name);
+    }
+
+    fn add_output(&mut self, output: Arc<dyn PubSubChannel<Message>>) {
+        self.output = Some(output);
+
+        tracing::info!("Lowpass stage [{}] output set", self.name);
+    }
 
     async fn init(&mut self) -> anyhow::Result<()> {
         Ok(())
     }
 
-    async fn run(self: Box<Self>) -> anyhow::Result<()> {
-        tracing::info!("Low pass filter stage is running");
+    async fn run(&mut self) -> anyhow::Result<()> {
+        tracing::info!("Log output stage is running");
 
+        Ok(())
+    }
+
+    async fn stop(&mut self) -> anyhow::Result<()> {
+        tracing::info!("Log output stage is stopping");
         Ok(())
     }
 }

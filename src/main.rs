@@ -57,9 +57,12 @@ async fn main() {
         }
     });
 
-    core::pipeline::PipelineManager::new(config)
+    let _ = core::pipeline::PipelineManager::new(config)
         .build_all()
         .expect("pipeline building")
+        .connect_stages()
+        .await
+        .expect("pipeline connection")
         .start_all()
         .await;
 
