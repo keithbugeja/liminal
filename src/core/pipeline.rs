@@ -90,7 +90,7 @@ impl PipelineManager {
             for input_name in inputs {
                 if let Some(channel) = channel_registry.get(input_name) {
                     let subscriber = channel.subscribe();
-                    stage.lock().await.add_input(subscriber);
+                    stage.lock().await.add_input(subscriber).await;
                 } else {
                     return Err(anyhow::anyhow!("Input channel {:?} not found", input_name));
                 }
@@ -114,7 +114,7 @@ impl PipelineManager {
                 channel_config.capacity,
             );
 
-            stage.lock().await.add_output(channel.clone());
+            stage.lock().await.add_output(channel.clone()).await;
         }
 
         Ok(())
@@ -293,7 +293,6 @@ impl PipelineManager {
         }
 
         // futures::future::pending().await;
-
         Ok(())
     }
 }
