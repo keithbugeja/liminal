@@ -1,8 +1,8 @@
 use super::registry::ChannelRegistry;
+use super::stage::{Stage, create_stage};
 use crate::config::{ConcurrencyType, Config, StageConfig};
 use crate::core::channel::PubSubChannel;
 use crate::core::message::Message;
-use crate::stages::{self, Stage};
 
 use anyhow::Result;
 use std::collections::HashMap;
@@ -19,7 +19,7 @@ struct Pipeline {
 /// Manages the creation and connection of stages and pipelines.
 pub struct PipelineManager {
     config: Config,
-    stages: HashMap<String, Arc<Mutex<Box<dyn Stage>>>>,
+    stages: HashMap<String, Arc<Mutex<Box<Stage>>>>,
     pipelines: HashMap<String, Pipeline>,
     channel_registry: ChannelRegistry<Message>,
 }
@@ -83,7 +83,7 @@ impl PipelineManager {
     /// Map inputs from the stage configuration to the channel registry.
     async fn map_inputs(
         channel_registry: &mut ChannelRegistry<Message>,
-        stage: &Arc<Mutex<Box<dyn Stage>>>,
+        stage: &Arc<Mutex<Box<Stage>>>,
         stage_config: &StageConfig,
     ) -> Result<()> {
         if let Some(inputs) = &stage_config.inputs {
@@ -103,7 +103,7 @@ impl PipelineManager {
     /// Create an output channel for the stage if specified in the configuration.
     async fn create_output(
         channel_registry: &mut ChannelRegistry<Message>,
-        stage: &Arc<Mutex<Box<dyn Stage>>>,
+        stage: &Arc<Mutex<Box<Stage>>>,
         stage_config: &StageConfig,
     ) -> Result<()> {
         if let Some(output_name) = &stage_config.output {
@@ -206,13 +206,11 @@ impl PipelineManager {
     /// Create stages based on the provided stage configurations.
     fn create_stages(
         stage_configs: &HashMap<String, StageConfig>,
-    ) -> Result<HashMap<String, Arc<Mutex<Box<dyn Stage>>>>> {
-        let mut stages: HashMap<String, Arc<Mutex<Box<dyn Stage>>>> = HashMap::new();
+    ) -> Result<HashMap<String, Arc<Mutex<Box<Stage>>>>> {
+        let mut stages: HashMap<String, Arc<Mutex<Box<Stage>>>> = HashMap::new();
 
         for (stage_name, stage_config) in stage_configs {
-            if let Some(stage) =
-                stages::factory::create_stage(&stage_config.r#type, stage_config.clone())
-            {
+            if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {
                 stages.insert(stage_name.clone(), Arc::new(Mutex::new(stage)));
             } else {
                 return Err(anyhow::anyhow!("Failed to create stage: {}", stage_name));
@@ -226,7 +224,7 @@ impl PipelineManager {
     fn create_pipelines(
         &mut self,
     ) -> Result<(
-        HashMap<String, Arc<Mutex<Box<dyn Stage>>>>,
+        HashMap<String, Arc<Mutex<Box<Stage>>>>,
         HashMap<String, Pipeline>,
     )> {
         let mut pipelines = HashMap::new();
@@ -251,7 +249,7 @@ impl PipelineManager {
 
     /// Build all stages and pipelines based on the provided configuration.
     pub fn build_all(mut self) -> Result<Self> {
-        let _ = crate::factory::create_stage_factories();
+        let _ = crate::processors::factory::create_processor_factories();
 
         // Create input stages
         let input_stages = Self::create_stages(&self.config.inputs)?;

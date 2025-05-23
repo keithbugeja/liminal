@@ -1,11 +1,10 @@
 mod config;
 mod core;
 mod logging;
-mod stages;
+mod processors;
 
 use config::ChannelType;
 use core::channel::*;
-use stages::factory;
 use tokio::task;
 
 use tracing::{error, info};

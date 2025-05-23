@@ -2,6 +2,7 @@
 [inputs.random_temp]
 type = "simulated"
 output = "raw_temp_data"
+concurrency = { type = "thread" }
 channel = { type = "direct", capacity = 100 }
 parameters = { type = "random", min = -10, max = 40, interval = 1000 }
 
