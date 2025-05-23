@@ -1,8 +1,11 @@
 use super::processor::Processor;
+
 use crate::config::StageConfig;
 use crate::core::channel::{PubSubChannel, Subscriber};
 use crate::core::message::Message;
+
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct LogOutputStage {
@@ -26,9 +29,22 @@ impl Processor for LogOutputStage {
 
     async fn process(
         &mut self,
-        inputs: Vec<Subscriber<Message>>,
-        output: Option<Arc<dyn PubSubChannel<Message>>>,
+        inputs: &mut HashMap<String, Subscriber<Message>>,
+        _: Option<&Arc<dyn PubSubChannel<Message>>>,
     ) -> anyhow::Result<()> {
+        for (name, input) in inputs.iter_mut() {
+            if let Some(message) = input.recv().await {
+                println!("Received from [{}]: {:?}", name, message);
+
+                tracing::info!(
+                    "Log output stage [{}] received message from [{}]: {:?}",
+                    self.name,
+                    name,
+                    message
+                );
+            }
+        }
+
         Ok(())
     }
 }

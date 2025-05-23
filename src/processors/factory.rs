@@ -7,17 +7,28 @@ use crate::config::StageConfig;
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+/// A type alias for a function that creates a processor.
 type ProcessorConstructor = Box<dyn Fn(&str, StageConfig) -> Box<dyn Processor> + Send + Sync>;
 
 lazy_static::lazy_static! {
     static ref PROCESSOR_REGISTRY: Mutex<HashMap<String, ProcessorConstructor>> = Mutex::new(HashMap::new());
 }
 
+/// Registers a processor constructor with the given name.
+/// # Arguments
+/// * `name` - The name of the processor.
+/// * `constructor` - A function that creates the processor.
 pub fn register_processor(name: &str, constructor: ProcessorConstructor) {
     let mut registry = PROCESSOR_REGISTRY.lock().unwrap();
     registry.insert(name.to_string(), constructor);
 }
 
+//// Creates a processor with the given name and configuration.
+/// # Arguments
+/// * `name` - The name of the processor.
+/// * `config` - The configuration for the processor.
+/// # Returns
+/// * An `Option` containing the created processor, or `None` if the processor was not found.
 pub fn create_processor(name: &str, config: StageConfig) -> Option<Box<dyn Processor>> {
     tracing::info!("Creating processor '{}'", name);
 
@@ -27,6 +38,9 @@ pub fn create_processor(name: &str, config: StageConfig) -> Option<Box<dyn Proce
         .map(|constructor| constructor(name, config))
 }
 
+/// Registers default processors.
+/// # Returns
+/// * A result indicating success or failure.
 pub fn create_processor_factories() -> anyhow::Result<()> {
     register_processor("simulated", Box::new(SimulatedInputStage::new));
     register_processor("low_pass_filter", Box::new(LowPassFilterStage::new));

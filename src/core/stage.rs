@@ -3,8 +3,18 @@ use crate::core::channel::PubSubChannel;
 use crate::core::channel::Subscriber;
 use crate::core::message::Message;
 use crate::processors::processor::Processor;
+use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Creates a new stage with the given name and configuration.
+///
+/// # Arguments
+/// * `name` - The name of the stage.
+/// * `config` - The configuration for the stage.
+///
+/// # Returns
+/// An `Option` containing a `Box<Stage>` if the stage was created successfully, or `None` if the processor was not found.
+///
 pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
     if let Some(processor) = crate::processors::create_processor(name, config) {
         Some(Box::new(Stage::new(name.to_string(), processor, None)))
@@ -14,6 +24,7 @@ pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub enum ControlMessage {
     Terminate,
 }
@@ -21,23 +32,23 @@ pub enum ControlMessage {
 pub struct Stage {
     name: String,
     processor: Box<dyn Processor>,
-    inputs: Vec<Subscriber<Message>>,
+    inputs: HashMap<String, Subscriber<Message>>,
     output: Option<Arc<dyn PubSubChannel<Message>>>,
-    conrol_channel: Option<tokio::sync::mpsc::Receiver<ControlMessage>>,
+    control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
 }
 
 impl Stage {
     pub fn new(
         name: String,
         processor: Box<dyn Processor>,
-        control_channel: Option<tokio::sync::mpsc::Receiver<ControlMessage>>,
+        control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
     ) -> Self {
         Self {
             name,
             processor,
-            inputs: Vec::new(),
+            inputs: HashMap::new(),
             output: None,
-            conrol_channel: control_channel,
+            control_channel: control_channel,
         }
     }
 
@@ -45,8 +56,16 @@ impl Stage {
         &self.name
     }
 
-    pub async fn add_input(&mut self, input: Subscriber<Message>) {
-        self.inputs.push(input);
+    pub fn attach_control_channel(
+        &mut self,
+        control_channel: tokio::sync::broadcast::Receiver<ControlMessage>,
+    ) {
+        self.control_channel = Some(control_channel);
+        tracing::info!("Stage [{}] control channel attached", self.name);
+    }
+
+    pub async fn add_input(&mut self, name: &str, input: Subscriber<Message>) {
+        self.inputs.insert(name.to_string(), input);
         tracing::info!("Stage [{}] input added", self.name);
     }
 
@@ -61,6 +80,35 @@ impl Stage {
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
         tracing::info!("Stage [{}] is running", self.name);
+
+        loop {
+            tokio::select! {
+                // Handle control messages
+                Some(message) = async {
+                    if let Some(control_channel) = &mut self.control_channel {
+                        control_channel.recv().await.ok()
+                    } else {
+                        None
+                    }
+                } => {
+                    match message {
+                        ControlMessage::Terminate => {
+                            tracing::info!("Stage [{}] received terminate signal", self.name);
+                            break;
+                        }
+                    }
+                }
+
+                // Process messages
+                result = self.processor.process(&mut self.inputs, self.output.as_ref()) => {
+                    // Handle the result of the processor
+                    if let Err(e) = result {
+                        tracing::error!("Error in processor for stage [{}]: {}", self.name, e);
+                        return Err(e);
+                    }
+                }
+            }
+        }
 
         Ok(())
     }

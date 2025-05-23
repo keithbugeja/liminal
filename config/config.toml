@@ -6,63 +6,46 @@ concurrency = { type = "thread" }
 channel = { type = "direct", capacity = 100 }
 parameters = { type = "random", min = -10, max = 40, interval = 1000 }
 
-[inputs.sine_wave]
-type = "simulated"
-output = "raw_sine_data"
-parameters = { type = "sine_wave", amplitude = 1.0, frequency = 0.1, interval = 500 }
+# [inputs.sine_wave]
+# type = "simulated"
+# output = "raw_sine_data"
+# parameters = { type = "sine_wave", amplitude = 1.0, frequency = 0.1, interval = 500 }
 
 # Pipelines: Simulated data processing
 [pipelines.simulated_pipeline]
 description = "Processes simulated temperature and sine wave data"
 
-[pipelines.simulated_pipeline.stages.temp_filter]
-type = "low_pass_filter"
-inputs = ["raw_temp_data"]
-output = "filtered_temp"
-parameters = { threshold = 0.5 }
+# [pipelines.simulated_pipeline.stages.temp_filter]
+# type = "low_pass_filter"
+# inputs = ["raw_temp_data"]
+# output = "filtered_temp"
+# parameters = { threshold = 0.5 }
 
 [pipelines.simulated_pipeline.stages.sine_transform]
 type = "scale"
-inputs = ["raw_sine_data"]
+inputs = ["raw_temp_data"]
 output = "scaled_sine"
-parameters = { scale_factor = 2.0 }
+parameters = { scale_variable_in = "counter", scale_variable_out = "scaled_counter", scale_factor = 2.0 }
 
-[pipelines.simulated_pipeline.stages.fusion]
-type = "fusion"
-inputs = ["filtered_temp", "scaled_sine"]
-output = "fused_simulated_data"
-parameters = { method = "average" }
+# [pipelines.simulated_pipeline.stages.sine_transform]
+# type = "scale"
+# inputs = ["raw_sine_data"]
+# output = "scaled_sine"
+# parameters = { scale_factor = 2.0 }
 
-[pipelines.simulated_pipeline.stages.log_output]
-type = "log"
-inputs = ["fused_simulated_data"]
-parameters = { format = "csv", destination = "file://logs/simulated_data.csv" }
+# [pipelines.simulated_pipeline.stages.fusion]
+# type = "fusion"
+# inputs = ["filtered_temp", "scaled_sine"]
+# output = "fused_simulated_data"
+# parameters = { method = "average" }
+
+# [pipelines.simulated_pipeline.stages.log_output]
+# type = "log"
+# inputs = ["fused_simulated_data"]
+# parameters = { format = "csv", destination = "file://logs/simulated_data.csv" }
 
 # Outputs: External data sinks
 [outputs.log_output]
 type = "log"
+inputs = ["scaled_sine"]
 parameters = { destination = "file://logs/simulated_output.log", format = "json" }
-
-
-# # Input Sources
-# [input_sources.sensor_a]
-# kind = "simulated"
-# topic = "sensors/a"
-# parameters = { interval_ms = 100 }
-
-# [input_sources.sensor_b]
-# kind = "simulated"
-# topic = "sensors/b"
-# parameters = { interval_ms = 100 }
-
-# [transforms.passthrough]
-# kind = "passthrough"
-
-# [aggregations.fusion]
-# kind = "fusion"
-# inputs = ["sensor_a", "sensor_b"]
-# parameters = { method = "weighted_average", weight_a = 0.6, weight_b = 0.4 }
-
-# [output_sinks.main]
-# kind = "log"
-# routes = ["fusion"]

@@ -3,6 +3,7 @@ use crate::config::StageConfig;
 use crate::core::channel::{PubSubChannel, Subscriber};
 use crate::core::message::Message;
 use async_trait::async_trait;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 pub struct LowPassFilterStage {
@@ -35,9 +36,18 @@ impl Processor for LowPassFilterStage {
 
     async fn process(
         &mut self,
-        inputs: Vec<Subscriber<Message>>,
-        output: Option<Arc<dyn PubSubChannel<Message>>>,
+        inputs: &mut HashMap<String, Subscriber<Message>>,
+        output: Option<&Arc<dyn PubSubChannel<Message>>>,
     ) -> anyhow::Result<()> {
+        for (name, input) in inputs.iter_mut() {
+            if let Some(message) = input.recv().await {
+                println!("Received from [{}]: {:?}", name, message);
+
+                if let Some(output_channel) = output {
+                    let _ = output_channel.publish(message).await;
+                }
+            }
+        }
         Ok(())
     }
 }

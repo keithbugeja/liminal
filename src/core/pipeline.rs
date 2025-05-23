@@ -1,5 +1,5 @@
 use super::registry::ChannelRegistry;
-use super::stage::{Stage, create_stage};
+use super::stage::{ControlMessage, Stage, create_stage};
 use crate::config::{ConcurrencyType, Config, StageConfig};
 use crate::core::channel::PubSubChannel;
 use crate::core::message::Message;
@@ -22,6 +22,8 @@ pub struct PipelineManager {
     stages: HashMap<String, Arc<Mutex<Box<Stage>>>>,
     pipelines: HashMap<String, Pipeline>,
     channel_registry: ChannelRegistry<Message>,
+    control_channel: Option<Arc<tokio::sync::broadcast::Sender<ControlMessage>>>,
+    stage_handles: HashMap<String, tokio::task::JoinHandle<()>>,
 }
 
 impl PipelineManager {
@@ -40,6 +42,8 @@ impl PipelineManager {
             stages: HashMap::new(),
             pipelines: HashMap::new(),
             channel_registry: ChannelRegistry::new(),
+            control_channel: None,
+            stage_handles: HashMap::new(),
         }
     }
 
@@ -90,7 +94,7 @@ impl PipelineManager {
             for input_name in inputs {
                 if let Some(channel) = channel_registry.get(input_name) {
                     let subscriber = channel.subscribe();
-                    stage.lock().await.add_input(subscriber).await;
+                    stage.lock().await.add_input(input_name, subscriber).await;
                 } else {
                     return Err(anyhow::anyhow!("Input channel {:?} not found", input_name));
                 }
@@ -264,35 +268,78 @@ impl PipelineManager {
         self.stages.extend(pipeline_stages);
         self.pipelines.extend(pipelines);
 
+        // Create the control channel
+        let (control_channel, _) = tokio::sync::broadcast::channel::<ControlMessage>(128);
+        self.control_channel = Some(Arc::new(control_channel));
+
         Ok(self)
     }
 
-    pub async fn start_all(mut self) -> Result<()> {
+    /// Start all stages in the pipeline.
+    pub async fn start_all(mut self) -> Result<Self> {
         tracing::info!("Starting all stages");
         let all_stages = self.get_all_stage_configs();
-        for (stage_name, stage_config) in all_stages {
+        for (stage_name, _) in all_stages {
             if let Some(stage) = self.stages.get_mut(&stage_name) {
-                // Initialise the stage
+                // Setup stage and wire control channel
                 {
                     let stage_clone = Arc::clone(stage);
                     let mut stage = stage_clone.lock().await;
+
+                    // Attach the control channel if available
+                    if let Some(control_channel) = &self.control_channel {
+                        stage.attach_control_channel(control_channel.subscribe());
+                    }
+
+                    // Initialise stage (and processor)
                     stage.init().await?;
                 }
 
                 // Run the stage
                 {
                     let stage_clone = Arc::clone(stage);
-                    tokio::spawn(async move {
+                    let stage_name_clone = stage_name.clone();
+
+                    // Spawn a new task to run the stage
+                    let handle = tokio::spawn(async move {
                         let mut stage_lock = stage_clone.lock().await;
                         if let Err(e) = stage_lock.run().await {
-                            tracing::error!("Error running stage [{}]: {}", stage_name, e);
+                            tracing::error!("Error running stage [{}]: {}", stage_name_clone, e);
                         }
                     });
+
+                    self.stage_handles.insert(stage_name, handle);
                 }
             }
         }
 
         // futures::future::pending().await;
+        Ok(self)
+    }
+
+    pub async fn wait_for_all_stages(self) -> Result<()> {
+        let control_channel_clone = self.control_channel.clone();
+
+        tokio::spawn(async move {
+            if let Err(e) = tokio::signal::ctrl_c().await {
+                tracing::error!("Failed to listen for Ctrl + C: {}", e);
+            }
+
+            tracing::info!("Received Ctrl+C -> shutting down.");
+            let _ = control_channel_clone
+                .as_ref()
+                .unwrap()
+                .send(ControlMessage::Terminate);
+        });
+
+        let handles: Vec<_> = self.stage_handles.into_values().collect();
+
+        println!("Handles: {:?}", handles);
+
+        futures::future::join_all(handles).await;
+
+        tracing::info!("All input sources have been processed.");
+
         Ok(())
     }
 }
