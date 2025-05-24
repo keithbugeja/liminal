@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 /// A type alias for a function that creates a processor.
-type ProcessorConstructor = Box<dyn Fn(&str, StageConfig) -> Box<dyn Processor> + Send + Sync>;
+// type ProcessorConstructor = Box<dyn Fn(&str, StageConfig) -> Box<dyn Processor> + Send + Sync>;
+type ProcessorConstructor = Box<dyn Fn(&str, StageConfig) -> anyhow::Result<Box<dyn Processor>> + Send + Sync>;
+
 
 lazy_static::lazy_static! {
     static ref PROCESSOR_REGISTRY: Mutex<HashMap<String, ProcessorConstructor>> = Mutex::new(HashMap::new());
@@ -30,13 +32,15 @@ pub fn register_processor(name: &str, constructor: ProcessorConstructor) {
 /// * `config` - The configuration for the processor.
 /// # Returns
 /// * An `Option` containing the created processor, or `None` if the processor was not found.
-pub fn create_processor(name: &str, config: StageConfig) -> Option<Box<dyn Processor>> {
+pub fn create_processor(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
     tracing::info!("Creating processor '{}'", name);
 
     let registry = PROCESSOR_REGISTRY.lock().unwrap();
     registry
         .get(name)
-        .map(|constructor| constructor(name, config))
+        .ok_or_else(|| anyhow::anyhow!("Processor '{}' not found", name))
+        .and_then(|constructor| constructor(name, config))
+        // .map(|constructor| constructor(name, config))
 }
 
 /// Registers default processors.

@@ -32,19 +32,13 @@ pub struct ScaleProcessor {
 }
 
 impl ScaleProcessor {
-    pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
-        let scale_config = ScaleConfig::from_stage_config(&config).unwrap_or_else(|_| {
-            tracing::warn!("Invalid configuration for scale processor, using default values");
-            ScaleConfig {
-                scale_factor: 1.0,
-                field_config: FieldConfig::None,
-            }
-        });
+    pub fn new(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        let scale_config = ScaleConfig::from_stage_config(&config)?;
 
-        Box::new(Self {
+        Ok(Box::new(Self {
             name: name.to_string(),
             config: scale_config,
-        })
+        }))
     }
 }
 

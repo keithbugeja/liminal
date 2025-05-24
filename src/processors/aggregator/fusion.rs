@@ -10,10 +10,10 @@ pub struct FusionStage {
 }
 
 impl FusionStage {
-    pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
-        Box::new(Self {
+    pub fn new(name: &str, _: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        Ok(Box::new(Self {
             name: name.to_string(),
-        })
+        }))
     }
 }
 

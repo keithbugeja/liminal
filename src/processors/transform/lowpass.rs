@@ -32,19 +32,13 @@ pub struct LowPassProcessor {
 }
 
 impl LowPassProcessor {
-    pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
-        let lowpass_config = LowPassConfig::from_stage_config(&config).unwrap_or_else(|_| {
-            tracing::warn!("Invalid configuration for lowpass processor, using default values");
-            LowPassConfig {
-                threshold: 25.0,
-                field_config: FieldConfig::None,
-            }
-        });
+    pub fn new(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        let lowpass_config = LowPassConfig::from_stage_config(&config)?;
 
-        Box::new(Self {
+        Ok(Box::new(Self {
             name: name.to_string(),
             config: lowpass_config,
-        })
+        }))
     }
 
    async fn process_message(

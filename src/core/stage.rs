@@ -18,7 +18,7 @@ use std::sync::Arc;
 /// An `Option` containing a `Box<Stage>` if the stage was created successfully, or `None` if the processor was not found.
 ///
 pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
-    if let Some(processor) = crate::processors::create_processor(name, config) {
+    if let Ok(processor) = crate::processors::create_processor(name, config) {
         Some(Box::new(Stage::new(name.to_string(), processor, None)))
     } else {
         tracing::error!("Stage processor '{}' not found", name);

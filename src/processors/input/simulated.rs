@@ -10,7 +10,7 @@ use rand_distr::{Distribution, Normal, Uniform};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Duration;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct SimulatedSignalConfig {
     pub interval_ms: u64,
     pub distribution: String,
@@ -57,13 +57,13 @@ pub struct SimulatedSignalProcessor {
 }
 
 impl SimulatedSignalProcessor {
-    pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
-        let processor_config = SimulatedSignalConfig::from_stage_config(&config).unwrap_or_default();
+    pub fn new(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        let processor_config = SimulatedSignalConfig::from_stage_config(&config)?;
 
-        Box::new(Self {
+        Ok(Box::new(Self {
             name: name.to_string(),
             config: processor_config,
-        })
+        }))
     }
 }
 

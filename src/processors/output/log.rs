@@ -10,10 +10,10 @@ pub struct ConsoleLogProcessor {
 }
 
 impl ConsoleLogProcessor {
-    pub fn new(name: &str, _ : StageConfig) -> Box<dyn Processor> {
-        Box::new(Self {
+    pub fn new(name: &str, _ : StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        Ok(Box::new(Self {
             name: name.to_string(),
-        })
+        }))
     }
 }
 
