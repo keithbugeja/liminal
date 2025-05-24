@@ -108,4 +108,3 @@ pub struct PipelineConfig {
     pub description: String,
     pub stages: HashMap<String, StageConfig>,
 }
-

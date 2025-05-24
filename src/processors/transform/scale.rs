@@ -3,25 +3,47 @@ use super::super::processor::Processor;
 use crate::config::{StageConfig, extract_param, extract_field_params, FieldConfig};
 use crate::core::context::ProcessingContext;
 use crate::core::message::Message;
+use crate::config::ProcessorConfig;
 
 use async_trait::async_trait;
 use tokio::select;
 
+#[derive(Debug, Clone)]
+pub struct ScaleConfig {
+    pub scale_factor: f64,
+    pub field_config: FieldConfig,
+}
+
+impl ProcessorConfig for ScaleConfig {
+    fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
+        let scale_factor = extract_param(&config.parameters, "scale_factor", 1.0);
+        let field_config = extract_field_params(&config.parameters);
+
+        Ok(Self {
+            scale_factor,
+            field_config,
+        })
+    }
+}
+
 pub struct ScaleProcessor {
     name: String,
-    scale_factor: f64,
-    field_config: FieldConfig,
+    config: ScaleConfig,
 }
 
 impl ScaleProcessor {
     pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
-        let scale_factor = extract_param(&config.parameters, "scale_factor", 0.5);
-        let field_config = extract_field_params(&config.parameters);
+        let scale_config = ScaleConfig::from_stage_config(&config).unwrap_or_else(|_| {
+            tracing::warn!("Invalid configuration for scale processor, using default values");
+            ScaleConfig {
+                scale_factor: 1.0,
+                field_config: FieldConfig::None,
+            }
+        });
 
         Box::new(Self {
             name: name.to_string(),
-            scale_factor,
-            field_config,
+            config: scale_config,
         })
     }
 }
@@ -43,10 +65,10 @@ impl Processor for ScaleProcessor {
                     if let Some(message) = message {
                         let mut payload = serde_json::json!({});
 
-                        match &self.field_config {
+                        match &self.config.field_config {
                             FieldConfig::Single {input, output} => {
                                 if let Some(input_value) = message.payload.get(input) {
-                                    let scaled_value = input_value.as_f64().unwrap_or(0.0) * self.scale_factor;
+                                    let scaled_value = input_value.as_f64().unwrap_or(0.0) * self.config.scale_factor;
                                     payload[output] = serde_json::json!(scaled_value);
                                 }
                             }
@@ -55,7 +77,7 @@ impl Processor for ScaleProcessor {
                             FieldConfig::Multiple { inputs, outputs } => {
                                 for (input, output) in inputs.iter().zip(outputs.iter()) {
                                     if let Some(input_value) = message.payload.get(input) {
-                                        let scaled_value = input_value.as_f64().unwrap_or(0.0) * self.scale_factor;
+                                        let scaled_value = input_value.as_f64().unwrap_or(0.0) * self.config.scale_factor;
                                         payload[output] = serde_json::json!(scaled_value);
                                     }
                                 }

@@ -1,4 +1,4 @@
-use crate::config::schema::ChannelType;
+use crate::config::types::ChannelType;
 use async_trait::async_trait;
 use flume;
 use std::sync::Mutex;

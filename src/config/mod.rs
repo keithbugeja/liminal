@@ -1,13 +1,14 @@
 pub mod loader;
-pub mod schema;
+pub mod types;
 pub mod validation;
 pub mod field;
-pub mod extraction;
+pub mod params;
+pub mod traits;
 
 pub use field::FieldConfig;
+pub use traits::ProcessorConfig;
 
 pub use loader::load_config;
-pub use extraction::extract_param;
-pub use extraction::extract_field_params;
-pub use schema::*;
+pub use params::{extract_param, extract_field_params};
+pub use types::{ Config, StageConfig, ConcurrencyType };
 pub use validation::validate_config;

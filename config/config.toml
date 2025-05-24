@@ -4,22 +4,11 @@ type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
 channel = { type = "direct", capacity = 100 }
-parameters = { field_out = "temperature", type = "normal", min = -10.0, max = 40.0, interval = 1000 }
-
-# [inputs.sine_wave]
-# type = "simulated"
-# output = "raw_sine_data"
-# parameters = { type = "sine_wave", amplitude = 1.0, frequency = 0.1, interval = 500 }
+parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 1000 }
 
 # Pipelines: Simulated data processing
 [pipelines.simulated_pipeline]
 description = "Processes simulated temperature and sine wave data"
-
-# [pipelines.simulated_pipeline.stages.temp_filter]
-# type = "low_pass_filter"
-# inputs = ["raw_temp_data"]
-# output = "filtered_temp"
-# parameters = { threshold = 0.5 }
 
 [pipelines.simulated_pipeline.stages.scale_temp]
 type = "scale"
@@ -31,23 +20,6 @@ parameters = { field_in = "temperature", field_out = "scaled_temperature", scale
 #fields_in = ["sex", "temperature", "humidity"]
 #fields_out = ["scaled_sex", "scaled_temperature", "scaled_humidity"]
 #scale_factor = 2.0
-
-# [pipelines.simulated_pipeline.stages.sine_transform]
-# type = "scale"
-# inputs = ["raw_sine_data"]
-# output = "scaled_sine"
-# parameters = { scale_factor = 2.0 }
-
-# [pipelines.simulated_pipeline.stages.fusion]
-# type = "fusion"
-# inputs = ["filtered_temp", "scaled_sine"]
-# output = "fused_simulated_data"
-# parameters = { method = "average" }
-
-# [pipelines.simulated_pipeline.stages.log_output]
-# type = "log"
-# inputs = ["fused_simulated_data"]
-# parameters = { format = "csv", destination = "file://logs/simulated_data.csv" }
 
 # Outputs: External data sinks
 [outputs.log_output]

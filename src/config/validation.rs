@@ -1,39 +1,71 @@
-use super::schema::*;
+use super::types::*;
+use super::params::extract_field_params;
+use super::field::FieldConfig;
 
-pub fn validate_config(config: &Config) -> Result<(), String> {
-    if config.inputs.is_empty() {
-        return Err("No input sources defined".into());
+/// Validate the entire configuration
+pub fn validate_config(config: &Config) -> anyhow::Result<()> {
+
+    // Validate inputs
+    for (name, stage_config) in &config.inputs {
+        validate_input_stage(name, stage_config)?;
     }
 
-    if config.pipelines.is_empty() {
-        return Err("No pipeline stages defined".into());
+    // Validate pipelines
+    for (name, pipeline_config) in &config.pipelines {
+        validate_pipeline(name, pipeline_config)?;
+    }
+    
+    // Validate outputs
+    for (name, stage_config) in &config.outputs {
+        validate_output_stage(name, stage_config)?;
     }
 
-    if config.outputs.is_empty() {
-        return Err("No output sources defined".into());
+    Ok(())
+}
+
+fn validate_input_stage(name: &str, config: &StageConfig) -> anyhow::Result<()> {
+    // Input stages should have output but no inputs
+    if config.inputs.is_some() {
+        return Err(anyhow::anyhow!("Input stage '{}' should not have inputs", name));
+    }
+    if config.output.is_none() {
+        return Err(anyhow::anyhow!("Input stage '{}' must have an output", name));
     }
 
-    // for (pipeline_name, pipeline) in &config.pipelines {
-    //     let mut available_outputs = config.inputs.keys().cloned().collect::<Vec<String>>();
+    // Validate field configuration
+    let field_config = extract_field_params(&config.parameters);
+    match field_config {
+        FieldConfig::OutputOnly(_) => Ok(()),
+        FieldConfig::None => Ok(()),
+        _ => Err(anyhow::anyhow!("Input stage '{}' should only have output field configuration", name)),
+    }
+}
 
-    //     for (stage_name, stage) in &pipeline.stages {
-    //         if let Some(inputs) = &stage.inputs {
-    //             for input in inputs {
-    //                 if !available_outputs.contains(input) {
-    //                     println!("Available outputs: {:?}", available_outputs);
-    //                     return Err(format!(
-    //                         "Pipeline '{}' stage '{}' references unknown input source '{}'",
-    //                         pipeline_name, stage_name, input
-    //                     ));
-    //                 }
-    //             }
-    //         }
+fn validate_pipeline(name: &str, config: &PipelineConfig) -> anyhow::Result<()> {
+    for (stage_name, stage_config) in &config.stages {
+        validate_pipeline_stage(name, stage_name, stage_config)?;
+    }
+    Ok(())
+}
 
-    //         if let Some(output) = &stage.output {
-    //             available_outputs.push(output.clone());
-    //         }
-    //     }
-    // }
+fn validate_pipeline_stage(pipeline_name: &str, stage_name: &str, config: &StageConfig) -> anyhow::Result<()> {
+    // Pipeline stages should have both inputs and output
+    if config.inputs.is_none() || config.inputs.as_ref().unwrap().is_empty() {
+        return Err(anyhow::anyhow!("Pipeline stage '{}.{}' must have inputs", pipeline_name, stage_name));
+    }
+    if config.output.is_none() {
+        return Err(anyhow::anyhow!("Pipeline stage '{}.{}' must have an output", pipeline_name, stage_name));
+    }
+    Ok(())
+}
 
+fn validate_output_stage(name: &str, config: &StageConfig) -> anyhow::Result<()> {
+    // Output stages should have inputs but no output
+    if config.inputs.is_none() || config.inputs.as_ref().unwrap().is_empty() {
+        return Err(anyhow::anyhow!("Output stage '{}' must have inputs", name));
+    }
+    if config.output.is_some() {
+        return Err(anyhow::anyhow!("Output stage '{}' should not have an output", name));
+    }
     Ok(())
 }
