@@ -96,7 +96,7 @@ impl PipelineManager {
                     let subscriber = channel.subscribe();
                     stage.lock().await.add_input(input_name, subscriber).await;
                 } else {
-                    return Err(anyhow::anyhow!("Input channel {:?} not found", input_name));
+                    return Err(anyhow::anyhow!("Input channel '{}' not found", input_name));
                 }
             }
         }
@@ -133,7 +133,7 @@ impl PipelineManager {
         let stage = self
             .stages
             .get_mut(stage_name)
-            .ok_or_else(|| anyhow::anyhow!("Stage not found: {}", stage_name))?;
+            .ok_or_else(|| anyhow::anyhow!("Stage not found: '{}'", stage_name))?;
 
         if !Self::are_all_inputs_available(&self.channel_registry, stage_config)? {
             return Err(anyhow::anyhow!(
@@ -195,8 +195,6 @@ impl PipelineManager {
         let mut deferred_stages = Vec::new();
 
         for (stage_name, stage_config) in all_stages {
-            tracing::info!("Connecting stage [{}]", stage_name);
-
             if let Err(_) = self.try_connect_stage(&stage_name, &stage_config).await {
                 deferred_stages.push((stage_name, stage_config));
             }
@@ -214,10 +212,15 @@ impl PipelineManager {
         let mut stages: HashMap<String, Arc<Mutex<Box<Stage>>>> = HashMap::new();
 
         for (stage_name, stage_config) in stage_configs {
-            if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {
+            println!("{} => {:?}", stage_name, stage_config);
+            
+            // Use the type as name of the stage
+            // if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {            
+            
+            if let Some(stage) = create_stage(&stage_name, stage_config.clone()) {
                 stages.insert(stage_name.clone(), Arc::new(Mutex::new(stage)));
             } else {
-                return Err(anyhow::anyhow!("Failed to create stage: {}", stage_name));
+                return Err(anyhow::anyhow!("Failed to create stage: '{}'", stage_name));
             }
         }
 

@@ -207,7 +207,7 @@ fn ensure_default_processors() {
         register_processor("lowpass", Box::new(LowPassProcessor::new));
         register_processor("scale", Box::new(ScaleProcessor::new));
         register_processor("fusion", Box::new(FusionStage::new));
-        register_processor("log", Box::new(ConsoleLogProcessor::new));
+        register_processor("console", Box::new(ConsoleLogProcessor::new));
         tracing::info!("Default processors registered!");
     });
 }
@@ -267,6 +267,6 @@ pub fn create_processor(name: &str, config: StageConfig) -> anyhow::Result<Box<d
 
     registry
         .get(name)
-        .ok_or_else(|| anyhow::anyhow!("Processor [{}] not found", name))
+        .ok_or_else(|| anyhow::anyhow!("Processor '{}' not found", name))
         .and_then(|constructor| constructor(name, config))
 }

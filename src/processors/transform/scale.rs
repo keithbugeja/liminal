@@ -45,7 +45,7 @@ impl ScaleProcessor {
 #[async_trait]
 impl Processor for ScaleProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Scale processor [{}] initialised", self.name);
+        tracing::info!("Scale processor '{}' initialised", self.name);
         Ok(())
     }
 

@@ -80,7 +80,7 @@ impl LowPassProcessor {
 #[async_trait]
 impl Processor for LowPassProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Lowpass processor [{}] initialised", self.name);
+        tracing::info!("Lowpass processor '{}' initialised", self.name);
         Ok(())
     }
 

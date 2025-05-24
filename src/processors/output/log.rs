@@ -20,7 +20,7 @@ impl ConsoleLogProcessor {
 #[async_trait]
 impl Processor for ConsoleLogProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Log output stage [{}] initialized", self.name);
+        tracing::info!("Console output processor '{}' initialised", self.name);
         Ok(())
     }
 
@@ -33,8 +33,9 @@ impl Processor for ConsoleLogProcessor {
         for (name, input) in context.inputs.iter_mut() {
             if let Some(message) = input.try_recv().await {
                 tracing::info!(
-                    "Log output stage [{}] received message from [{}]: {:?}",
-                    self.name, name, message
+                    "'{}' => {:?}",
+                    name, 
+                    message
                 );
             }
         }

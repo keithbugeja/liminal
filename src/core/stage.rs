@@ -18,7 +18,10 @@ use std::sync::Arc;
 /// An `Option` containing a `Box<Stage>` if the stage was created successfully, or `None` if the processor was not found.
 ///
 pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
-    if let Ok(processor) = crate::processors::create_processor(name, config) {
+    // Uncomment if the stage name is used as processor type
+    // if let Ok(processor) = crate::processors::create_processor(name, config) {
+    
+    if let Ok(processor) = crate::processors::create_processor(&config.r#type.clone(), config) {
         Some(Box::new(Stage::new(name.to_string(), processor, None)))
     } else {
         tracing::error!("Stage processor '{}' not found", name);
@@ -61,17 +64,14 @@ impl Stage {
         control_channel: tokio::sync::broadcast::Receiver<ControlMessage>,
     ) {
         self.control_channel = Some(control_channel);
-        tracing::info!("Stage [{}] control channel attached", self.name);
     }
 
     pub async fn add_input(&mut self, name: &str, input: Subscriber<Message>) {
         self.context.add_input(name.to_string(), input);
-        tracing::info!("Stage [{}] input added", self.name);
     }
 
     pub async fn add_output(&mut self, name: &str, output: Arc<dyn PubSubChannel<Message>>) {
         self.context.attach_output(name.to_string(), output);
-        tracing::info!("Stage [{}] output set", self.name);
     }
 
     pub async fn init(&mut self) -> anyhow::Result<()> {
@@ -79,7 +79,7 @@ impl Stage {
     }
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Stage [{}] is running", self.name);
+        tracing::info!("Stage '{}' is running", self.name);
 
         loop {
             tokio::select! {
@@ -93,7 +93,7 @@ impl Stage {
                 } => {
                     match message {
                         ControlMessage::Terminate => {
-                            tracing::info!("Stage [{}] received terminate signal", self.name);
+                            tracing::info!("Stage '{}' received terminate signal", self.name);
                             break;
                         }
                     }
@@ -103,7 +103,7 @@ impl Stage {
                 result = self.processor.process(&mut self.context) => {
                     // Handle the result of the processor
                     if let Err(e) = result {
-                        tracing::error!("Error in processor for stage [{}]: {}", self.name, e);
+                        tracing::error!("Error in processor for stage '{}': {}", self.name, e);
                         return Err(e);
                     }
                 }

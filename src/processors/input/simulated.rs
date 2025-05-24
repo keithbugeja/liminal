@@ -70,7 +70,7 @@ impl SimulatedSignalProcessor {
 #[async_trait]
 impl Processor for SimulatedSignalProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Simulated input stage [{}] initialized", self.name);
+        tracing::info!("Simulated signal processor '{}' initialised", self.name);
         Ok(())
     }
 

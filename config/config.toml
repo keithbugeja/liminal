@@ -48,6 +48,6 @@ parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_facto
 
 # Outputs: External data sinks
 [outputs.log_output]
-type = "log"
+type = "console"
 inputs = ["scaled_temperature", "filtered_temperature", "scaled_humidity"]
-parameters = { destination = "file://logs/simulated_output.log", format = "json" }
+# parameters = { destination = "file://logs/simulated_output.log", format = "json" }
