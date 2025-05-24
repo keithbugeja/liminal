@@ -118,7 +118,7 @@ impl PipelineManager {
                 channel_config.capacity,
             );
 
-            stage.lock().await.add_output(channel.clone()).await;
+            stage.lock().await.add_output(&output_name, channel.clone()).await;
         }
 
         Ok(())

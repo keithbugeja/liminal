@@ -109,27 +109,3 @@ pub struct PipelineConfig {
     pub stages: HashMap<String, StageConfig>,
 }
 
-/// Extracts a parameter from the given parameters map.
-/// If the parameter is not found, the provided default value is returned.
-///
-/// # Arguments
-/// - `params`: An optional map of parameters.
-/// - `key`: The key of the parameter to extract.
-/// - `default`: The default value to return if the key is not found.
-///
-/// # Returns
-/// The extracted parameter value or the default value.
-pub fn extract_param<T>(
-    params: &Option<HashMap<String, serde_json::Value>>,
-    key: &str,
-    default: T,
-) -> T
-where
-    T: serde::de::DeserializeOwned + Clone,
-{
-    params
-        .as_ref()
-        .and_then(|p| p.get(key))
-        .and_then(|v| serde_json::from_value(v.clone()).ok())
-        .unwrap_or(default)
-}

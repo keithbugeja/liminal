@@ -1,18 +1,15 @@
-use super::processor::Processor;
+use super::super::processor::Processor;
 
 use crate::config::StageConfig;
-use crate::core::channel::{PubSubChannel, Subscriber};
-use crate::core::message::Message;
+use crate::core::context::ProcessingContext;
 
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::Arc;
 
-pub struct LogOutputStage {
+pub struct ConsoleLogProcessor {
     name: String,
 }
 
-impl LogOutputStage {
+impl ConsoleLogProcessor {
     pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
         Box::new(Self {
             name: name.to_string(),
@@ -21,21 +18,15 @@ impl LogOutputStage {
 }
 
 #[async_trait]
-impl Processor for LogOutputStage {
+impl Processor for ConsoleLogProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
         tracing::info!("Log output stage [{}] initialized", self.name);
         Ok(())
     }
 
-    async fn process(
-        &mut self,
-        inputs: &mut HashMap<String, Subscriber<Message>>,
-        _: Option<&Arc<dyn PubSubChannel<Message>>>,
-    ) -> anyhow::Result<()> {
-        for (name, input) in inputs.iter_mut() {
+    async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
+        for (name, input) in context.inputs.iter_mut() {
             if let Some(message) = input.recv().await {
-                println!("Received from [{}]: {:?}", name, message);
-
                 tracing::info!(
                     "Log output stage [{}] received message from [{}]: {:?}",
                     self.name,

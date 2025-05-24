@@ -1,7 +1,8 @@
-use super::lowpass::LowPassFilterStage;
 use super::processor::Processor;
-use super::scale::ScaleFilterStage;
-use super::simulated::SimulatedInputStage;
+use super::input::SimulatedSignalProcessor;
+use super::transform::{ScaleProcessor, LowPassFilterStage};
+use super::aggregator::FusionStage;
+use super::output::ConsoleLogProcessor;
 use crate::config::StageConfig;
 
 use std::collections::HashMap;
@@ -42,11 +43,11 @@ pub fn create_processor(name: &str, config: StageConfig) -> Option<Box<dyn Proce
 /// # Returns
 /// * A result indicating success or failure.
 pub fn create_processor_factories() -> anyhow::Result<()> {
-    register_processor("simulated", Box::new(SimulatedInputStage::new));
+    register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
     register_processor("low_pass_filter", Box::new(LowPassFilterStage::new));
-    register_processor("scale", Box::new(ScaleFilterStage::new));
-    register_processor("fusion", Box::new(super::fusion::FusionStage::new));
-    register_processor("log", Box::new(super::log::LogOutputStage::new));
+    register_processor("scale", Box::new(ScaleProcessor::new));
+    register_processor("fusion", Box::new(FusionStage::new));
+    register_processor("log", Box::new(ConsoleLogProcessor::new));
 
     tracing::info!("Default processors registered!");
 

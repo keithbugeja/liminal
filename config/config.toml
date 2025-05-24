@@ -4,7 +4,7 @@ type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
 channel = { type = "direct", capacity = 100 }
-parameters = { key_out = "temperature", type = "random", min = -10, max = 40, interval = 1000 }
+parameters = { field_out = "temperature", type = "normal", min = -10.0, max = 40.0, interval = 1000 }
 
 # [inputs.sine_wave]
 # type = "simulated"
@@ -21,11 +21,16 @@ description = "Processes simulated temperature and sine wave data"
 # output = "filtered_temp"
 # parameters = { threshold = 0.5 }
 
-[pipelines.simulated_pipeline.stages.sine_transform]
+[pipelines.simulated_pipeline.stages.scale_temp]
 type = "scale"
 inputs = ["raw_temp_data"]
-output = "scaled_sine"
-parameters = { scale_variable_in = "temperature", scale_variable_out = "scaled_temperature", scale_factor = 2.0 }
+output = "scaled_temperature"
+parameters = { field_in = "temperature", field_out = "scaled_temperature", scale_factor = 1.0 }
+# For multiple fields, you can use the following commented section:
+#[pipelines.simulated_pipeline.stages.scale_temp.parameters]
+#fields_in = ["sex", "temperature", "humidity"]
+#fields_out = ["scaled_sex", "scaled_temperature", "scaled_humidity"]
+#scale_factor = 2.0
 
 # [pipelines.simulated_pipeline.stages.sine_transform]
 # type = "scale"
@@ -47,5 +52,5 @@ parameters = { scale_variable_in = "temperature", scale_variable_out = "scaled_t
 # Outputs: External data sinks
 [outputs.log_output]
 type = "log"
-inputs = ["scaled_sine"]
+inputs = ["scaled_temperature"]
 parameters = { destination = "file://logs/simulated_output.log", format = "json" }

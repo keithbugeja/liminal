@@ -1,9 +1,11 @@
+use super::channel::PubSubChannel;
+use super::channel::Subscriber;
+use super::message::Message;
+use super::context::{ProcessingContext, OutputInfo};
+
 use crate::config::StageConfig;
-use crate::core::channel::PubSubChannel;
-use crate::core::channel::Subscriber;
-use crate::core::message::Message;
 use crate::processors::processor::Processor;
-use std::collections::HashMap;
+
 use std::sync::Arc;
 
 /// Creates a new stage with the given name and configuration.
@@ -29,11 +31,12 @@ pub enum ControlMessage {
     Terminate,
 }
 
+
+
 pub struct Stage {
     name: String,
     processor: Box<dyn Processor>,
-    inputs: HashMap<String, Subscriber<Message>>,
-    output: Option<Arc<dyn PubSubChannel<Message>>>,
+    context: ProcessingContext,
     control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
 }
 
@@ -44,10 +47,9 @@ impl Stage {
         control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
     ) -> Self {
         Self {
-            name,
+            name: name.clone(),
             processor,
-            inputs: HashMap::new(),
-            output: None,
+            context: ProcessingContext::new(name),
             control_channel: control_channel,
         }
     }
@@ -65,12 +67,12 @@ impl Stage {
     }
 
     pub async fn add_input(&mut self, name: &str, input: Subscriber<Message>) {
-        self.inputs.insert(name.to_string(), input);
+        self.context.add_input(name.to_string(), input);
         tracing::info!("Stage [{}] input added", self.name);
     }
 
-    pub async fn add_output(&mut self, output: Arc<dyn PubSubChannel<Message>>) {
-        self.output = Some(output);
+    pub async fn add_output(&mut self, name: &str, output: Arc<dyn PubSubChannel<Message>>) {
+        self.context.attach_output(name.to_string(), output);
         tracing::info!("Stage [{}] output set", self.name);
     }
 
@@ -100,7 +102,7 @@ impl Stage {
                 }
 
                 // Process messages
-                result = self.processor.process(&mut self.inputs, self.output.as_ref()) => {
+                result = self.processor.process(&mut self.context) => {
                     // Handle the result of the processor
                     if let Err(e) = result {
                         tracing::error!("Error in processor for stage [{}]: {}", self.name, e);

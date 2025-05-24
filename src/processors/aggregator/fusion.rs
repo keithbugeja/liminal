@@ -1,12 +1,9 @@
-use super::processor::Processor;
+use super::super::processor::Processor;
 
 use crate::config::StageConfig;
-use crate::core::channel::{PubSubChannel, Subscriber};
-use crate::core::message::Message;
+use crate::core::context::ProcessingContext;
 
 use async_trait::async_trait;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 pub struct FusionStage {
     name: String,
@@ -27,17 +24,13 @@ impl Processor for FusionStage {
         Ok(())
     }
 
-    async fn process(
-        &mut self,
-        inputs: &mut HashMap<String, Subscriber<Message>>,
-        output: Option<&Arc<dyn PubSubChannel<Message>>>,
-    ) -> anyhow::Result<()> {
-        for (name, input) in inputs.iter_mut() {
+    async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
+        for (name, input) in context.inputs.iter_mut() {
             if let Some(message) = input.recv().await {
                 println!("Received from [{}]: {:?}", name, message);
 
-                if let Some(output_channel) = output {
-                    let _ = output_channel.publish(message).await;
+                if let Some(output_info) = &context.output {
+                    let _ = output_info.channel.publish(message).await;
                 }
             }
         }

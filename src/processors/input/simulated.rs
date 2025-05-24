@@ -1,17 +1,15 @@
-use super::processor::Processor;
+use super::super::processor::Processor;
 
-use crate::config::{StageConfig, extract_param};
-use crate::core::channel::{PubSubChannel, Subscriber};
+use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfig};
 use crate::core::message::Message;
+use crate::core::context::ProcessingContext;
 
 use async_trait::async_trait;
 use rand_distr::{Distribution, Normal, Uniform};
-use std::collections::HashMap;
-use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Duration;
 
-pub struct SimulatedInputStage {
+pub struct SimulatedSignalProcessor {
     name: String,
     interval_ms: u64,
     distribution: String,
@@ -20,14 +18,18 @@ pub struct SimulatedInputStage {
     value_name: String,
 }
 
-
-impl SimulatedInputStage {
+impl SimulatedSignalProcessor {
     pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
         let interval_ms = extract_param(&config.parameters, "interval_ms", 1000);
         let distribution = extract_param(&config.parameters, "distribution", "uniform".to_string());
-        let min_value = extract_param(&config.parameters, "min_value", 0.0);
-        let max_value = extract_param(&config.parameters, "max_value", 100.0);
-        let value_name = extract_param(&config.parameters, "key_out", "value".to_string());
+        let min_value = extract_param(&config.parameters, "min", 0.0);
+        let max_value = extract_param(&config.parameters, "max", 100.0);        
+
+        let field_config = extract_field_params(&config.parameters);
+        let value_name = match &field_config {
+            FieldConfig::OutputOnly(name) => name.clone(),
+            _ => "value".to_string(),
+        };
 
         Box::new(Self {
             name: name.to_string(),
@@ -41,7 +43,7 @@ impl SimulatedInputStage {
 }
 
 #[async_trait]
-impl Processor for SimulatedInputStage {
+impl Processor for SimulatedSignalProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
         tracing::info!("Simulated input stage [{}] initialized", self.name);
         Ok(())
@@ -49,8 +51,7 @@ impl Processor for SimulatedInputStage {
 
     async fn process(
         &mut self,
-        _: &mut HashMap<String, Subscriber<Message>>,
-        output: Option<&Arc<dyn PubSubChannel<Message>>>,
+        context: &mut ProcessingContext,
     ) -> anyhow::Result<()> {
         // Generate a random value based on the specified distribution
         // and send it to the output channel. The rng is dropped before
@@ -83,15 +84,21 @@ impl Processor for SimulatedInputStage {
             _ = tokio::time::sleep(Duration::from_millis(self.interval_ms)) => {
                 let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
 
+                let topic = if let Some(output_info) = &context.output {
+                    output_info.name.clone()
+                } else {
+                    "simulated".to_string()
+                };
+
                 let message = Message {
                     source: self.name.clone(),
-                    topic: "simulated".into(),
+                    topic,
                     payload: serde_json::json!({ &self.value_name : value }), // Fix: use value, not 1
                     timestamp: now,
                 };
 
-                if let Some(output_channel) = output {
-                    let _ = output_channel.publish(message).await;
+                if let Some(output_info) = &context.output {
+                    let _ = output_info.channel.publish(message).await;
                 }
             }
         }
