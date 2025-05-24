@@ -1,59 +1,272 @@
-use super::processor::Processor;
-use super::input::SimulatedSignalProcessor;
-use super::transform::{ScaleProcessor, LowPassProcessor};
-use super::aggregator::FusionStage;
-use super::output::ConsoleLogProcessor;
+//! Processor Factory Module
+//! 
+//! This module provides a dynamic registry system for creating processors at runtime.
+//! It maintains a thread-safe registry of processor constructors that can be looked up
+//! by name, enabling extensible processor creation without compile-time dependencies.
+//! 
+//! # Architecture
+//! 
+//! The factory uses a singleton pattern with `OnceLock` to ensure thread-safe initialisation
+//! of the processor registry. Default processors are automatically registered on first access,
+//! but custom processors can be registered at any time.
+//! 
+//! # Example Usage
+//! 
+//! ```rust
+//! use liminal::processors::factory::{create_processor, register_processor};
+//! use liminal::config::StageConfig;
+//! 
+//! // Create a built-in processor
+//! let config = StageConfig { /* ... */ };
+//! let processor = create_processor("scale", config)?;
+//! 
+//! // Register and create a custom processor
+//! register_processor("custom", Box::new(MyProcessor::new));
+//! let custom = create_processor("custom", config)?;
+//! ```
+//! 
+//! # Thread Safety
+//! 
+//! All functions in this module are thread-safe and can be called concurrently
+//! from multiple threads without external synchronisation.
+//!
+//! # Note (TODO):
+//! The factory could be extended to include metadata for each processor, such as
+//! name, description, and required/optional parameters. This would allow for more
+//! comprehensive introspection and documentation of available processors.
+//! ```
+//! pub struct ProcessorMetadata {
+//!     pub name: &'static str,
+//!     pub description: &'static str,
+//!     pub required_params: &'static [&'static str],
+//!     pub optional_params: &'static [&'static str],
+//! }
+//! 
+//! type ProcessorConstructorWithMeta = (
+//!     ProcessorMetadata,
+//!     Box<dyn Fn(&str, StageConfig) -> anyhow::Result<Box<dyn Processor>> + Send + Sync>
+//! );
+//! 
+//! // Registration becomes:
+//! register_processor_with_meta(
+//!     "scale",
+//!     ProcessorMetadata {
+//!         name: "scale",
+//!         description: "Scales numeric field values",
+//!         required_params: &["field_in", "field_out"],
+//!         optional_params: &["scale_factor"],
+//!     },
+//!     Box::new(ScaleProcessor::new)
+//! );
+//! ```
+
+use crate::processors::{ 
+    Processor,
+    input::SimulatedSignalProcessor,    
+    transform::{ScaleProcessor, LowPassProcessor},
+    aggregator::FusionStage,
+    output::ConsoleLogProcessor,
+};
 use crate::config::StageConfig;
 
 use std::collections::HashMap;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
-/// A type alias for a function that creates a processor.
-// type ProcessorConstructor = Box<dyn Fn(&str, StageConfig) -> Box<dyn Processor> + Send + Sync>;
+/// Type alias for processor constructor functions.
+/// 
+/// A processor constructor takes a name and configuration, and returns either
+/// a boxed processor or an error if construction fails. All constructors must
+/// be thread-safe (`Send + Sync`).
+/// 
+/// # Parameters
+/// - `&str`: The name/identifier for the processor instance
+/// - `StageConfig`: Configuration parameters for the processor
+/// 
+/// # Returns
+/// - `anyhow::Result<Box<dyn Processor>>`: The created processor or an error
 type ProcessorConstructor = Box<dyn Fn(&str, StageConfig) -> anyhow::Result<Box<dyn Processor>> + Send + Sync>;
 
+/// Global registry for processor constructors.
+/// 
+/// This static variable holds the singleton registry that maps processor type names
+/// to their constructor functions. It uses `OnceLock` for thread-safe lazy initialisation.
+static PROCESSOR_REGISTRY: OnceLock<Mutex<HashMap<String, ProcessorConstructor>>> = OnceLock::new();
 
-lazy_static::lazy_static! {
-    static ref PROCESSOR_REGISTRY: Mutex<HashMap<String, ProcessorConstructor>> = Mutex::new(HashMap::new());
+/// Retrieves the global processor registry, initializing it if necessary.
+/// 
+/// This function provides access to the singleton processor registry. The registry
+/// is initialized on first access and remains valid for the lifetime of the program.
+/// 
+/// # Returns
+/// A reference to the mutex-protected registry HashMap.
+/// 
+/// # Thread Safety
+/// This function is thread-safe and can be called concurrently.
+fn get_processor_registry() -> &'static Mutex<HashMap<String, ProcessorConstructor>> {
+    PROCESSOR_REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Registers a processor constructor with the given name.
+/// Lists all registered processor type names.
+/// 
+/// Returns a vector containing the names of all processor types that are currently
+/// registered in the factory. This includes both built-in processors (which are
+/// auto-registered on first access) and any custom processors that have been
+/// manually registered.
+/// 
+/// # Returns
+/// A vector of strings containing the names of all registered processors.
+/// 
+/// # Example
+/// ```rust
+/// let processors = list_processors();
+/// println!("Available processors: {:?}", processors);
+/// // Output: ["simulated", "scale", "lowpass", "fusion", "log"]
+/// ```
+pub fn list_processors() -> Vec<String> {
+    ensure_default_processors();
+
+    let registry = get_processor_registry().lock().unwrap();
+    registry.keys().cloned().collect()
+}
+
+/// Checks if a processor with the given type name exists in the registry.
+/// 
+/// This function can be used to validate processor type names before attempting
+/// to create them, helping to provide better error messages and validation.
+/// 
 /// # Arguments
-/// * `name` - The name of the processor.
-/// * `constructor` - A function that creates the processor.
+/// * `name` - The processor type name to check for
+/// 
+/// # Returns
+/// * `true` if a processor with this name is registered, `false` otherwise
+/// 
+/// # Example
+/// ```rust
+/// if processor_exists("scale") {
+///     let processor = create_processor("scale", config)?;
+/// } else {
+///     eprintln!("Scale processor not available");
+/// }
+/// ```
+pub fn processor_exists(name: &str) -> bool {
+    ensure_default_processors();
+
+    let registry = get_processor_registry().lock().unwrap();
+    registry.contains_key(name)
+}
+
+/// Registers a processor constructor with the given type name.
+/// 
+/// This function allows runtime registration of new processor types. The constructor
+/// function will be stored in the registry and can be used by `create_processor()`.
+/// If a processor with the same name already exists, it will be replaced.
+/// 
+/// # Arguments
+/// * `name` - The unique type name for this processor
+/// * `constructor` - A function that creates instances of this processor type
+/// 
+/// # Thread Safety
+/// This function is thread-safe and can be called from multiple threads.
+/// 
+/// # Example
+/// ```rust
+/// // Register a custom processor
+/// register_processor("my_processor", Box::new(|name, config| {
+///     MyCustomProcessor::new(name, config)
+/// }));
+/// 
+/// // Now it can be created like built-in processors
+/// let processor = create_processor("my_processor", config)?;
+/// ```
 pub fn register_processor(name: &str, constructor: ProcessorConstructor) {
-    let mut registry = PROCESSOR_REGISTRY.lock().unwrap();
+    let mut registry = get_processor_registry().lock().unwrap();
     registry.insert(name.to_string(), constructor);
 }
 
-//// Creates a processor with the given name and configuration.
+/// Ensures that the default built-in processors are registered.
+/// 
+/// This function performs one-time initialization of the default processor types.
+/// It uses `OnceLock` to guarantee that registration happens exactly once, even
+/// in multi-threaded environments. This is called automatically by other factory
+/// functions, so manual invocation is typically not necessary.
+/// 
+/// # Registered Processors
+/// - `"simulated"` - Generates simulated signal data
+/// - `"lowpass"` - Filters values below a threshold  
+/// - `"scale"` - Multiplies field values by a scale factor
+/// - `"fusion"` - Combines data from multiple inputs
+/// - `"log"` - Outputs received messages to console/file
+/// 
+/// # Thread Safety
+/// This function is thread-safe and idempotent - calling it multiple times
+/// has the same effect as calling it once.
+fn ensure_default_processors() {
+    static INITIALIZED: OnceLock<()> = OnceLock::new();
+    INITIALIZED.get_or_init(|| {
+        register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
+        register_processor("lowpass", Box::new(LowPassProcessor::new));
+        register_processor("scale", Box::new(ScaleProcessor::new));
+        register_processor("fusion", Box::new(FusionStage::new));
+        register_processor("log", Box::new(ConsoleLogProcessor::new));
+        tracing::info!("Default processors registered!");
+    });
+}
+
+/// Creates a processor instance of the specified type with the given configuration.
+/// 
+/// This is the main entry point for processor creation. It looks up the constructor
+/// for the requested processor type and invokes it with the provided configuration.
+/// Built-in processors are automatically available, but the registry can be extended
+/// with custom processors using `register_processor()`.
+/// 
 /// # Arguments
-/// * `name` - The name of the processor.
-/// * `config` - The configuration for the processor.
+/// * `name` - The processor type name (e.g., "scale", "lowpass", "simulated")
+/// * `config` - Configuration parameters for the processor
+/// 
 /// # Returns
-/// * An `Option` containing the created processor, or `None` if the processor was not found.
+/// * `Ok(Box<dyn Processor>)` - Successfully created processor
+/// * `Err(anyhow::Error)` - Creation failed due to:
+///   - Unknown processor type
+///   - Invalid configuration parameters
+///   - Constructor-specific validation errors
+/// 
+/// # Example
+/// ```rust
+/// use liminal::config::StageConfig;
+/// 
+/// let config = StageConfig {
+///     r#type: "scale".to_string(),
+///     parameters: Some(HashMap::from([
+///         ("scale_factor".to_string(), json!(2.0)),
+///         ("field_in".to_string(), json!("input")),
+///         ("field_out".to_string(), json!("output")),
+///     ])),
+///     // ... other fields
+/// };
+/// 
+/// match create_processor("scale", config) {
+///     Ok(processor) => println!("Processor created successfully"),
+///     Err(e) => eprintln!("Failed to create processor: {}", e),
+/// }
+/// ```
+/// 
+/// # Error Handling
+/// This function can fail in several ways:
+/// - **Unknown processor type**: The requested type is not registered
+/// - **Configuration errors**: Invalid or missing required parameters
+/// - **Resource errors**: Insufficient resources or system constraints
+/// 
+/// # Thread Safety
+/// This function is thread-safe and can be called concurrently from multiple threads.
 pub fn create_processor(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
     tracing::info!("Creating processor '{}'", name);
 
-    let registry = PROCESSOR_REGISTRY.lock().unwrap();
+    ensure_default_processors();
+
+    let registry = get_processor_registry().lock().unwrap();
+
     registry
         .get(name)
-        .ok_or_else(|| anyhow::anyhow!("Processor '{}' not found", name))
+        .ok_or_else(|| anyhow::anyhow!("Processor [{}] not found", name))
         .and_then(|constructor| constructor(name, config))
-        // .map(|constructor| constructor(name, config))
-}
-
-/// Registers default processors.
-/// # Returns
-/// * A result indicating success or failure.
-pub fn create_processor_factories() -> anyhow::Result<()> {
-    register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
-    register_processor("lowpass", Box::new(LowPassProcessor::new));
-    register_processor("scale", Box::new(ScaleProcessor::new));
-    register_processor("fusion", Box::new(FusionStage::new));
-    register_processor("log", Box::new(ConsoleLogProcessor::new));
-
-    tracing::info!("Default processors registered!");
-
-    Ok(())
 }

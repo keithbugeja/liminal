@@ -253,8 +253,6 @@ impl PipelineManager {
 
     /// Build all stages and pipelines based on the provided configuration.
     pub fn build_all(mut self) -> Result<Self> {
-        let _ = crate::processors::factory::create_processor_factories();
-
         // Create input stages
         let input_stages = Self::create_stages(&self.config.inputs)?;
         self.stages.extend(input_stages);

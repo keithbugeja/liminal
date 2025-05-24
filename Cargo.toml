@@ -13,7 +13,6 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 async-trait = "0.1.88"
 futures = "0.3.31"
 anyhow = "1.0.98"
-lazy_static = "1.5.0"
 flume = "0.11.1"
 rand = "0.9.1"
 rand_distr = "0.5.1"

@@ -1,4 +1,4 @@
-use super::super::processor::Processor;
+use crate::processors::Processor;
 
 use crate::config::{StageConfig, extract_param, extract_field_params, FieldConfig};
 use crate::core::context::ProcessingContext;

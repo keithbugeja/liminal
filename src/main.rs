@@ -5,6 +5,7 @@ mod processors;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() {
+    // Initialize logging
     logging::init_logging("info");
 
     // Load configuration
@@ -24,7 +25,7 @@ async fn main() {
     }
 
     // Configuration loaded and validated
-    tracing::info!("Configuration loaded and validated.");
+    tracing::info!("Configuration loaded and validated successfully.");
 
     // Initialize the pipeline manager
     tracing::info!("Initialising pipeline manager...");
@@ -40,5 +41,6 @@ async fn main() {
         .wait_for_all()
         .await;
 
+    // Pipeline terminated
     tracing::info!("All input sources have been processed.");
 }

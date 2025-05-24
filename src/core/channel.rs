@@ -124,8 +124,6 @@ where
     M: Clone + Send + Sync + 'static,
 {
     pub fn new(capacity: usize) -> Self {
-        tracing::info!("Creating broadcast channel with capacity: {}", capacity);
-
         let (sender, _receiver) = broadcast::channel(capacity);
         Self { sender }
     }

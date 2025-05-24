@@ -1,4 +1,4 @@
-use super::super::processor::Processor;
+use crate::processors::Processor;
 
 use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfig};
 use crate::core::message::Message;

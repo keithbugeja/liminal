@@ -262,7 +262,6 @@ dependencies = [
  "async-trait",
  "flume",
  "futures",
- "lazy_static",
  "rand",
  "rand_distr",
  "serde",
