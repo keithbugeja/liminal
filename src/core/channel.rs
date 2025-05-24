@@ -179,14 +179,15 @@ where
 /// Fanout channel / reliable fan-out channel (at-least-once)
 pub struct FanoutChannel<M> {
     capacity: usize,
-    senders: tokio::sync::Mutex<Vec<mpsc::Sender<M>>>,
+    senders: std::sync::Mutex<Vec<mpsc::Sender<M>>>//tokio::sync::Mutex<Vec<mpsc::Sender<M>>>,
 }
 
 impl<M> FanoutChannel<M> {
     pub fn new(capacity: usize) -> Self {
         Self {
             capacity,
-            senders: tokio::sync::Mutex::new(Vec::new()),
+            senders: std::sync::Mutex::new(Vec::new()),
+            // senders: tokio::sync::Mutex::new(Vec::new()),
         }
     }
 }
@@ -197,16 +198,31 @@ where
     M: Clone + Send + 'static,
 {
     async fn publish(&self, msg: M) -> Result<(), PublishError<M>> {
+        // Lock the senders vector to ensure thread safety
         let senders = {
-            let guard = self.senders.lock().await;
+            let guard = self.senders.lock().unwrap();
             guard.clone()
         };
 
-        for sender in senders.iter() {
-            sender
-                .send(msg.clone())
-                .await
-                .map_err(PublishError::FanoutError)?;
+        let mut failed_count = 0;
+        let total_count = senders.len();
+
+        for sender in &senders {
+            if sender.send(msg.clone()).await.is_err() {
+                failed_count += 1;
+            }
+        }
+
+        // Clean up dead senders if any failed
+        if failed_count > 0 {
+            let mut guard = self.senders.lock().unwrap();
+            guard.retain(|sender| !sender.is_closed());
+            
+            if failed_count == total_count && total_count > 0 {
+                return Err(PublishError::FanoutError(
+                    mpsc::error::SendError(msg) // Return the original message
+                ));
+            }
         }
 
         Ok(())
@@ -215,8 +231,13 @@ where
     fn subscribe(&self) -> Subscriber<M> {
         let (sender, receiver) = mpsc::channel(self.capacity);
 
-        let mut guard = futures::executor::block_on(self.senders.lock());
-        guard.push(sender);
+        // Goddamn, using tokio Mutex in a sync function wasn't the greateast of ideas
+        // Switched to std::sync::Mutex - should work well in a sync environment
+        {
+            let mut guard = self.senders.lock().unwrap();
+            guard.push(sender);
+        }
+        
         Subscriber::Fanout(receiver)
     }
 }
