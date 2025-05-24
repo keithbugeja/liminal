@@ -3,18 +3,12 @@ mod core;
 mod logging;
 mod processors;
 
-use config::ChannelType;
-use core::channel::*;
-use tokio::task;
-
-use tracing::{error, info};
-
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
 async fn main() {
     logging::init_logging("info");
 
     // Load configuration
-    let config_path = "/Users/keith/Development/liminal/config/config.toml";
+    let config_path = "./config/config.toml";
     let config = match config::load_config(config_path) {
         Ok(cfg) => cfg,
         Err(e) => {
@@ -32,6 +26,8 @@ async fn main() {
     // Configuration loaded and validated
     tracing::info!("Configuration loaded and validated.");
 
+    // Initialize the pipeline manager
+    tracing::info!("Initialising pipeline manager...");
     let _ = core::pipeline::PipelineManager::new(config)
         .build_all()
         .expect("pipeline building")
@@ -41,8 +37,8 @@ async fn main() {
         .start_all()
         .await
         .expect("pipeline started")
-        .wait_for_all_stages()
+        .wait_for_all()
         .await;
 
-    info!("All input sources have been processed.");
+    tracing::info!("All input sources have been processed.");
 }

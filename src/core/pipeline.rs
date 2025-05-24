@@ -317,9 +317,11 @@ impl PipelineManager {
         Ok(self)
     }
 
-    pub async fn wait_for_all_stages(self) -> Result<()> {
+    /// Wait for all stages to complete and handle termination signals.
+    pub async fn wait_for_all(self) -> Result<()> {
         let control_channel_clone = self.control_channel.clone();
 
+        // Listen for Ctrl+C signal
         tokio::spawn(async move {
             if let Err(e) = tokio::signal::ctrl_c().await {
                 tracing::error!("Failed to listen for Ctrl + C: {}", e);
@@ -334,11 +336,8 @@ impl PipelineManager {
 
         let handles: Vec<_> = self.stage_handles.into_values().collect();
 
-        println!("Handles: {:?}", handles);
-
+        // Wait for all stage handles to complete
         futures::future::join_all(handles).await;
-
-        tracing::info!("All input sources have been processed.");
 
         Ok(())
     }

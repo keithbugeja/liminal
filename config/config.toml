@@ -4,7 +4,7 @@ type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
 channel = { type = "direct", capacity = 100 }
-parameters = { type = "random", min = -10, max = 40, interval = 1000 }
+parameters = { key_out = "temperature", type = "random", min = -10, max = 40, interval = 1000 }
 
 # [inputs.sine_wave]
 # type = "simulated"
@@ -25,7 +25,7 @@ description = "Processes simulated temperature and sine wave data"
 type = "scale"
 inputs = ["raw_temp_data"]
 output = "scaled_sine"
-parameters = { scale_variable_in = "counter", scale_variable_out = "scaled_counter", scale_factor = 2.0 }
+parameters = { scale_variable_in = "temperature", scale_variable_out = "scaled_temperature", scale_factor = 2.0 }
 
 # [pipelines.simulated_pipeline.stages.sine_transform]
 # type = "scale"
