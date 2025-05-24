@@ -51,3 +51,8 @@ parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_facto
 type = "console"
 inputs = ["scaled_temperature", "filtered_temperature", "scaled_humidity"]
 # parameters = { destination = "file://logs/simulated_output.log", format = "json" }
+
+[outputs.json_logger]
+type = "file"
+inputs = ["scaled_temperature"]
+parameters = { file_path = "./logs/output.json", format = "json", append = true, create_dirs = true }

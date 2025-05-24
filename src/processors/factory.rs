@@ -65,8 +65,9 @@ use crate::processors::{
     input::SimulatedSignalProcessor,    
     transform::{ScaleProcessor, LowPassProcessor},
     aggregator::FusionStage,
-    output::ConsoleLogProcessor,
+    output::{ConsoleOutputProcessor, FileOutputProcessor},
 };
+
 use crate::config::StageConfig;
 
 use std::collections::HashMap;
@@ -207,7 +208,9 @@ fn ensure_default_processors() {
         register_processor("lowpass", Box::new(LowPassProcessor::new));
         register_processor("scale", Box::new(ScaleProcessor::new));
         register_processor("fusion", Box::new(FusionStage::new));
-        register_processor("console", Box::new(ConsoleLogProcessor::new));
+        register_processor("console", Box::new(ConsoleOutputProcessor::new));
+        register_processor("file", Box::new(FileOutputProcessor::new));
+
         tracing::info!("Default processors registered!");
     });
 }

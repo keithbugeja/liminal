@@ -1,3 +1,5 @@
-pub mod log;
+pub mod console;
+pub mod file;
 
-pub use log::ConsoleLogProcessor;
+pub use console::ConsoleOutputProcessor;
+pub use file::FileOutputProcessor;

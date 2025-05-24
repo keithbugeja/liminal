@@ -5,11 +5,11 @@ use crate::core::context::ProcessingContext;
 
 use async_trait::async_trait;
 
-pub struct ConsoleLogProcessor {
+pub struct ConsoleOutputProcessor {
     name: String,
 }
 
-impl ConsoleLogProcessor {
+impl ConsoleOutputProcessor {
     pub fn new(name: &str, _ : StageConfig) -> anyhow::Result<Box<dyn Processor>> {
         Ok(Box::new(Self {
             name: name.to_string(),
@@ -18,7 +18,7 @@ impl ConsoleLogProcessor {
 }
 
 #[async_trait]
-impl Processor for ConsoleLogProcessor {
+impl Processor for ConsoleOutputProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
         tracing::info!("Console output processor '{}' initialised", self.name);
         Ok(())
