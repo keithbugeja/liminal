@@ -20,19 +20,14 @@ description = "Processes simulated temperature data"
 [pipelines.simulated_pipeline.stages.scale_temp]
 type = "scale"
 inputs = ["raw_temp_data"]
-output = "scaled_temperature"
-parameters = { field_in = "temperature", field_out = "scaled_temperature", scale_factor = 1.5 }
-# For multiple fields, you can use the following commented section:
-#[pipelines.simulated_pipeline.stages.scale_temp.parameters]
-#fields_in = ["sex", "temperature", "humidity"]
-#fields_out = ["scaled_sex", "scaled_temperature", "scaled_humidity"]
-#scale_factor = 2.0
+output = "temperature_fahrenheit"
+parameters = { field_in = "temperature", field_out = "temperature_fahrenheit", scale_factor = 1.5 }
 
 [pipelines.simulated_pipeline.stages.lowpass_temp]
 type = "lowpass"
-inputs = ["scaled_temperature"]
+inputs = ["temperature_fahrenheit"]
 output = "filtered_temperature"
-parameters = { field_in = "scaled_temperature", field_out = "filtered_temperature", threshold = 20 }
+parameters = { field_in = "temperature_fahrenheit", field_out = "filtered_temperature", threshold = 50 }
 
 
 # Pipelines: Simulated data processing
@@ -49,10 +44,10 @@ parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_facto
 # Outputs: External data sinks
 [outputs.log_output]
 type = "console"
-inputs = ["scaled_temperature", "filtered_temperature", "scaled_humidity"]
+inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity"]
 # parameters = { destination = "file://logs/simulated_output.log", format = "json" }
 
-[outputs.json_logger]
-type = "file"
-inputs = ["scaled_temperature"]
-parameters = { file_path = "./logs/output.json", format = "json", append = true, create_dirs = true }
+# [outputs.json_logger]
+# type = "file"
+# inputs = ["scaled_temperature"]
+# parameters = { file_path = "./logs/output.json", format = "json", append = true, create_dirs = true }

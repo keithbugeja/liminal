@@ -3,21 +3,18 @@
 //! Writes messages to files with configurable formatting and rotation options.
 //! Supports JSON, CSV, and plain text output formats with automatic file
 //! creation and directory handling.
-//! 
-//! Author: Keith Bugeja
 
 use crate::processors::Processor;
 use crate::config::{StageConfig, ProcessorConfig};
 use crate::config::params::extract_param;
 use crate::core::context::ProcessingContext;
-use crate::core::message::Message;
 
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use serde::Deserialize;
+use std::path::PathBuf;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
-use std::collections::HashMap;
+
 
 /// Output format for file writing.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
