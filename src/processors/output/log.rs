@@ -10,7 +10,7 @@ pub struct ConsoleLogProcessor {
 }
 
 impl ConsoleLogProcessor {
-    pub fn new(name: &str, config: StageConfig) -> Box<dyn Processor> {
+    pub fn new(name: &str, _ : StageConfig) -> Box<dyn Processor> {
         Box::new(Self {
             name: name.to_string(),
         })
@@ -25,16 +25,22 @@ impl Processor for ConsoleLogProcessor {
     }
 
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
+        // Do nothing if there are no inputs
+        if context.inputs.is_empty() {
+            return Ok(());
+        }
+        
         for (name, input) in context.inputs.iter_mut() {
-            if let Some(message) = input.recv().await {
+            if let Some(message) = input.try_recv().await {
                 tracing::info!(
                     "Log output stage [{}] received message from [{}]: {:?}",
-                    self.name,
-                    name,
-                    message
+                    self.name, name, message
                 );
             }
         }
+        
+        // Small delay to prevent busy-waiting
+        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 
         Ok(())
     }

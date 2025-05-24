@@ -51,7 +51,7 @@ impl ScaleProcessor {
 #[async_trait]
 impl Processor for ScaleProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Scale filter stage [{}] initialized", self.name);
+        tracing::info!("Scale processor [{}] initialised", self.name);
         Ok(())
     }
 
@@ -59,7 +59,7 @@ impl Processor for ScaleProcessor {
         &mut self,
         context: &mut ProcessingContext,
     ) -> anyhow::Result<()> {
-        if let Some((name, input)) = context.inputs.iter_mut().next() {
+        if let Some((_, input)) = context.inputs.iter_mut().next() {
             select! {
                 message = input.recv() => {
                     if let Some(message) = message {

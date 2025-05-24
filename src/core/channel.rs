@@ -43,6 +43,27 @@ where
             Subscriber::Fanout(rx) => rx.recv().await,
         }
     }
+
+    pub async fn try_recv(&mut self) -> Option<M> {
+        match self {
+            Subscriber::Mpsc(rx) => match rx.try_recv() {
+                Ok(msg) => Some(msg),
+                _ => None,
+            }
+            Subscriber::Broadcast(rx) => match rx.try_recv() {
+                Ok(msg) => Some(msg),
+                _ => None,
+            },
+            Subscriber::Flume(rx) => match rx.try_recv() {
+                Ok(msg) => Some(msg),
+                _ => None,
+            }
+            Subscriber::Fanout(rx) => match rx.try_recv() {
+                Ok(msg) => Some(msg),
+                _ => None,
+            }
+        }
+    }
 }
 
 #[async_trait]
@@ -103,6 +124,8 @@ where
     M: Clone + Send + Sync + 'static,
 {
     pub fn new(capacity: usize) -> Self {
+        tracing::info!("Creating broadcast channel with capacity: {}", capacity);
+
         let (sender, _receiver) = broadcast::channel(capacity);
         Self { sender }
     }

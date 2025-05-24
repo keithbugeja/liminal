@@ -1,6 +1,6 @@
 use super::processor::Processor;
 use super::input::SimulatedSignalProcessor;
-use super::transform::{ScaleProcessor, LowPassFilterStage};
+use super::transform::{ScaleProcessor, LowPassProcessor};
 use super::aggregator::FusionStage;
 use super::output::ConsoleLogProcessor;
 use crate::config::StageConfig;
@@ -44,7 +44,7 @@ pub fn create_processor(name: &str, config: StageConfig) -> Option<Box<dyn Proce
 /// * A result indicating success or failure.
 pub fn create_processor_factories() -> anyhow::Result<()> {
     register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
-    register_processor("low_pass_filter", Box::new(LowPassFilterStage::new));
+    register_processor("lowpass", Box::new(LowPassProcessor::new));
     register_processor("scale", Box::new(ScaleProcessor::new));
     register_processor("fusion", Box::new(FusionStage::new));
     register_processor("log", Box::new(ConsoleLogProcessor::new));

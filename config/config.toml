@@ -3,26 +3,51 @@
 type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
-channel = { type = "direct", capacity = 100 }
+channel = { type = "broadcast", capacity = 256 }
 parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 1000 }
+
+[inputs.random_humidity]
+type = "simulated"
+output = "raw_humidity_data"
+concurrency = { type = "thread" }
+channel = { type = "broadcast", capacity = 256 }
+parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 1000 }
 
 # Pipelines: Simulated data processing
 [pipelines.simulated_pipeline]
-description = "Processes simulated temperature and sine wave data"
+description = "Processes simulated temperature data"
 
 [pipelines.simulated_pipeline.stages.scale_temp]
 type = "scale"
 inputs = ["raw_temp_data"]
 output = "scaled_temperature"
-parameters = { field_in = "temperature", field_out = "scaled_temperature", scale_factor = 1.0 }
+parameters = { field_in = "temperature", field_out = "scaled_temperature", scale_factor = 1.5 }
 # For multiple fields, you can use the following commented section:
 #[pipelines.simulated_pipeline.stages.scale_temp.parameters]
 #fields_in = ["sex", "temperature", "humidity"]
 #fields_out = ["scaled_sex", "scaled_temperature", "scaled_humidity"]
 #scale_factor = 2.0
 
+[pipelines.simulated_pipeline.stages.lowpass_temp]
+type = "lowpass"
+inputs = ["scaled_temperature"]
+output = "filtered_temperature"
+parameters = { field_in = "scaled_temperature", field_out = "filtered_temperature", threshold = 20 }
+
+
+# Pipelines: Simulated data processing
+[pipelines.simulated_pipeline_humidity]
+description = "Processes simulated humidity data"
+
+[pipelines.simulated_pipeline_humidity.stages.scale_humidity]
+type = "scale"
+inputs = ["raw_humidity_data"]
+output = "scaled_humidity"
+parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_factor = 2.0 }
+
+
 # Outputs: External data sinks
 [outputs.log_output]
 type = "log"
-inputs = ["scaled_temperature"]
+inputs = ["scaled_temperature", "filtered_temperature", "scaled_humidity"]
 parameters = { destination = "file://logs/simulated_output.log", format = "json" }

@@ -1,7 +1,7 @@
 use super::channel::PubSubChannel;
 use super::channel::Subscriber;
 use super::message::Message;
-use super::context::{ProcessingContext, OutputInfo};
+use super::context::ProcessingContext;
 
 use crate::config::StageConfig;
 use crate::processors::processor::Processor;
@@ -30,8 +30,6 @@ pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
 pub enum ControlMessage {
     Terminate,
 }
-
-
 
 pub struct Stage {
     name: String,

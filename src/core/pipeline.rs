@@ -1,6 +1,6 @@
 use super::registry::ChannelRegistry;
 use super::stage::{ControlMessage, Stage, create_stage};
-use crate::config::{ConcurrencyType, Config, StageConfig};
+use crate::config::{Config, StageConfig};
 use crate::core::channel::PubSubChannel;
 use crate::core::message::Message;
 
