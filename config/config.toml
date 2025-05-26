@@ -4,7 +4,7 @@ type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 1000 }
+parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 10 }
 
 [inputs.random_humidity]
 type = "simulated"
@@ -44,7 +44,9 @@ parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_facto
 # Outputs: External data sinks
 [outputs.log_output]
 type = "console"
-inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity"]
+inputs = [
+    "temperature_fahrenheit",
+] #, "filtered_temperature", "scaled_humidity"]
 # parameters = { destination = "file://logs/simulated_output.log", format = "json" }
 
 # [outputs.json_logger]

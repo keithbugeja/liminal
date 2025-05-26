@@ -314,13 +314,13 @@ Check the `config/` directory for example configurations:
 
 Liminal is built around a few key principles:
 
-**Async-first**: Everything uses async/await for efficient I/O
-**Type-safe configuration**: TOML configs are validated at startup
-**Backpressure handling**: Slow consumers don't break the whole pipeline
-**Distributed-ready**: Socket-based endpoints for multi-node deployment
-**Protocol-agnostic**: Support for various transport protocols (TCP, UDP, MQTT)
-**Extensible**: Easy to add new processor types
-**Observable**: Built-in logging and metrics (coming soon)
+- **Async-first**: Everything uses async/await for efficient I/O
+- **Type-safe configuration**: TOML configs are validated at startup
+- **Backpressure handling**: Slow consumers don't break the whole pipeline
+- **Distributed-ready**: Socket-based endpoints for multi-node deployment
+- **Protocol-agnostic**: Support for various transport protocols (TCP, UDP, MQTT)
+- **Extensible**: Easy to add new processor types
+- **Observable**: Built-in logging and metrics (coming soon)
 
 The core loop is simple:
 1. Load and validate configuration
@@ -329,7 +329,7 @@ The core loop is simple:
 4. Handle messages flowing between stages
 5. Gracefully shutdown on signals
 
-For distributed setups, socket endpoints handle serialization, network transport, and reconnection automatically.
+For distributed setups, socket endpoints handle serialisation, network transport, and reconnection automatically.
 
 ## Adding custom processors
 
@@ -377,7 +377,7 @@ Register it in `src/processors/mod.rs` and you're ready to use it in configs.
 **Distributed processing**  
 - Automatic service discovery and load balancing
 - Fault tolerance and automatic failover
-- Configuration synchronization across nodes
+- Configuration synchronisation across nodes
 
 **Advanced processing**
 - Time-based windowing and aggregation
@@ -387,7 +387,7 @@ Register it in `src/processors/mod.rs` and you're ready to use it in configs.
 **Operations**
 - Built-in metrics and health monitoring
 - Configuration hot-reloading
-- Performance profiling and optimization tools
+- Performance profiling and optimisation tools
 
 ## License
 
@@ -401,6 +401,6 @@ Areas that could use help:
 - MQTT and socket-based input/output processors
 - Distributed coordination and service discovery
 - Advanced transformation processors (windowing, aggregation, ML)
-- Performance optimization and benchmarking
+- Performance optimisation and benchmarking
 - Better error handling and recovery
 - Metrics and monitoring integration
