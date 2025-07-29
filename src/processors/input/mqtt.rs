@@ -27,7 +27,7 @@ pub struct MqttInputConfig {
 impl ProcessorConfig for MqttInputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         let broker_url = extract_param(&config.parameters, "broker_url", "mqtt://localhost:1883".to_string());
-        let topics: Vec<String> = extract_param(&config.parameters, "topics", vec!["#".to_string()]);
+        let topics: Vec<String> = extract_param(&config.parameters, "topics", vec!["#".to_string()]);      
         let client_id = extract_param(&config.parameters, "client_id", None);
         let qos = extract_param(&config.parameters, "qos", 0);
         let clean_session = extract_param(&config.parameters, "clean_session", true);
@@ -48,6 +48,8 @@ impl ProcessorConfig for MqttInputConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
+        println!("{:?}", self);
+
         if self.qos > 2 {
             return Err(anyhow::anyhow!("QoS must be between 0 and 2"));
         }
@@ -181,6 +183,8 @@ impl Processor for MqttInputProcessor {
                                 .duration_since(UNIX_EPOCH)
                                 .unwrap()
                                 .as_millis() as u64;
+
+                            tracing::info!("Message payload: {:?}", payload);
 
                             if let Some(output_info) = &context.output {
                                 let message = Message {
