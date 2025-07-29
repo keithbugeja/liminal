@@ -204,6 +204,7 @@ pub fn register_processor(name: &str, constructor: ProcessorConstructor) {
 fn ensure_default_processors() {
     static INITIALIZED: OnceLock<()> = OnceLock::new();
     INITIALIZED.get_or_init(|| {
+        register_processor("mqtt_sub", Box::new(crate::processors::input::MqttInputProcessor::new));
         register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
         register_processor("lowpass", Box::new(LowPassProcessor::new));
         register_processor("scale", Box::new(ScaleProcessor::new));

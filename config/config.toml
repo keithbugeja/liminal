@@ -4,14 +4,25 @@ type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 10 }
+parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 10000 }
 
 [inputs.random_humidity]
 type = "simulated"
 output = "raw_humidity_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 1000 }
+parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 10000 }
+
+[inputs.mqtt_temp]
+type = "mqtt_sub"
+output = "mqtt_temperature"
+broker_url = "mqtt://localhost:1883"
+topics = ["test/topic"]
+client_id = "test_mqtt_input"
+qos = 0
+clean_session = true
+username = ""
+password = ""
 
 # Pipelines: Simulated data processing
 [pipelines.simulated_pipeline]
@@ -44,9 +55,7 @@ parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_facto
 # Outputs: External data sinks
 [outputs.log_output]
 type = "console"
-inputs = [
-    "temperature_fahrenheit",
-] #, "filtered_temperature", "scaled_humidity"]
+inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity"]
 # parameters = { destination = "file://logs/simulated_output.log", format = "json" }
 
 # [outputs.json_logger]
