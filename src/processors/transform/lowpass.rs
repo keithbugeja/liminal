@@ -16,7 +16,7 @@ pub struct LowPassConfig {
 
 impl ProcessorConfig for LowPassConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
-        let threshold = extract_param(&config.parameters, "thresdhold", 25.0);
+        let threshold = extract_param(&config.parameters, "threshold", 0.0);
         let field_config = extract_field_params(&config.parameters);
 
         Ok(Self {
@@ -55,6 +55,7 @@ impl LowPassProcessor {
             return Ok(());
         };
 
+        // Drop messages above the threshold
         let value = input_value.as_f64().unwrap_or(0.0);
         if value >= self.config.threshold {
             return Ok(());
@@ -80,7 +81,11 @@ impl LowPassProcessor {
 #[async_trait]
 impl Processor for LowPassProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("Lowpass processor '{}' initialised", self.name);
+        tracing::info!(
+            "Lowpass processor '{}' initialised (threshold = {})", 
+            self.name,
+            self.config.threshold
+        );
         Ok(())
     }
 

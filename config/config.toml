@@ -1,17 +1,22 @@
-# Inputs: Simulated data sources
-[inputs.random_temp]
-type = "simulated"
-output = "raw_temp_data"
-concurrency = { type = "thread" }
-channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 10000 }
+# NOTE: Liminal uses config/config.toml as the main configuration file.
+# Until I get around to integrating clap for command line arguments,
+# I will be putting working configuration examples under the config/examples directory.
+# This allows me to keep the main config file clean and focused on the core configuration.
 
-[inputs.random_humidity]
-type = "simulated"
-output = "raw_humidity_data"
-concurrency = { type = "thread" }
-channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 10000 }
+# Inputs: Simulated data sources
+# [inputs.random_temp]
+# type = "simulated"
+# output = "raw_temp_data"
+# concurrency = { type = "thread" }
+# channel = { type = "broadcast", capacity = 256 }
+# parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 10000 }
+
+# [inputs.random_humidity]
+# type = "simulated"
+# output = "raw_humidity_data"
+# concurrency = { type = "thread" }
+# channel = { type = "broadcast", capacity = 256 }
+# parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 10000 }
 
 [inputs.mqtt_temp]
 type = "mqtt_sub"
@@ -20,38 +25,49 @@ concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
 parameters = { field_out = "acceleration", broker_url = "mqtt://localhost:1883", topics = ["test/acceleration"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
 
-# Pipelines: Simulated data processing
-[pipelines.simulated_pipeline]
-description = "Processes simulated temperature data"
+# Pipelines: MQTT data processing
+[pipelines.mqtt_pipeline]
+description = "Processes MQTT acceleration data"
 
-[pipelines.simulated_pipeline.stages.scale_temp]
-type = "scale"
-inputs = ["raw_temp_data"]
-output = "temperature_fahrenheit"
-parameters = { field_in = "temperature", field_out = "temperature_fahrenheit", scale_factor = 1.5 }
-
-[pipelines.simulated_pipeline.stages.lowpass_temp]
+[pipelines.mqtt_pipeline.stages.lowpass_acceleration]
 type = "lowpass"
-inputs = ["temperature_fahrenheit"]
-output = "filtered_temperature"
-parameters = { field_in = "temperature_fahrenheit", field_out = "filtered_temperature", threshold = 50 }
+inputs = ["raw_acceleration_data"]
+output = "filtered_acceleration"
+parameters = { field_in = "acceleration", field_out = "filtered_acceleration", threshold = 100 }
+
+# Pipelines: Simulated data processing
+# [pipelines.simulated_pipeline]
+# description = "Processes simulated temperature data"
+
+# [pipelines.simulated_pipeline.stages.scale_temp]
+# type = "scale"
+# inputs = ["raw_temp_data"]
+# output = "temperature_fahrenheit"
+# parameters = { field_in = "temperature", field_out = "temperature_fahrenheit", scale_factor = 1.5 }
+
+# [pipelines.simulated_pipeline.stages.lowpass_temp]
+# type = "lowpass"
+# inputs = ["temperature_fahrenheit"]
+# output = "filtered_temperature"
+# parameters = { field_in = "temperature_fahrenheit", field_out = "filtered_temperature", threshold = 50 }
 
 
 # Pipelines: Simulated data processing
-[pipelines.simulated_pipeline_humidity]
-description = "Processes simulated humidity data"
+# [pipelines.simulated_pipeline_humidity]
+# description = "Processes simulated humidity data"
 
-[pipelines.simulated_pipeline_humidity.stages.scale_humidity]
-type = "scale"
-inputs = ["raw_humidity_data"]
-output = "scaled_humidity"
-parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_factor = 2.0 }
+# [pipelines.simulated_pipeline_humidity.stages.scale_humidity]
+# type = "scale"
+# inputs = ["raw_humidity_data"]
+# output = "scaled_humidity"
+# parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_factor = 2.0 }
 
 
 # Outputs: External data sinks
 [outputs.log_output]
 type = "console"
-inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity"]
+# inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity", "filtered_acceleration"]
+inputs = ["filtered_acceleration"]
 # parameters = { destination = "file://logs/simulated_output.log", format = "json" }
 
 # [outputs.json_logger]
