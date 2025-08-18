@@ -1,9 +1,8 @@
 use crate::processors::Processor;
-
 use crate::config::{StageConfig, extract_param, extract_field_params, FieldConfig};
+use crate::config::ProcessorConfig;
 use crate::core::context::ProcessingContext;
 use crate::core::message::Message;
-use crate::config::ProcessorConfig;
 
 use async_trait::async_trait;
 use tokio::select;
@@ -71,6 +70,12 @@ impl LowPassProcessor {
             payload: serde_json::json!({ output: value }),
             timestamp: message.timestamp,
         };
+
+        tracing::debug!(
+            "Lowpass message published to topic '{}': {:?}",
+            output_info.name,
+            filtered_message
+        );
 
         let _ = output_info.channel.publish(filtered_message).await;
 

@@ -219,19 +219,19 @@ impl FileOutputProcessor {
     /// Writes a JSON payload to the file in the configured format.
     async fn write_message(&mut self, channel_name: &str, payload: &serde_json::Value) -> anyhow::Result<()> {
         let writer = self.writer.as_mut()
-            .ok_or_else(|| anyhow::anyhow!("File writer not initialized"))?;
+            .ok_or_else(|| anyhow::anyhow!("File writer not initialised"))?;
         
         match self.config.format {
             OutputFormat::Json => {
                 let json_line = serde_json::to_string(payload)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize payload to JSON: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to serialise payload to JSON: {}", e))?;
                 writer.write_all(json_line.as_bytes()).await?;
                 writer.write_all(b"\n").await?;
             }
             
             OutputFormat::Pretty => {
                 let json_pretty = serde_json::to_string_pretty(payload)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialize payload to pretty JSON: {}", e))?;
+                    .map_err(|e| anyhow::anyhow!("Failed to serialise payload to pretty JSON: {}", e))?;
                 writer.write_all(json_pretty.as_bytes()).await?;
                 writer.write_all(b"\n").await?;
             }

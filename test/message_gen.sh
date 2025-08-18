@@ -13,7 +13,8 @@ BROKER="localhost"
 TOPIC="test/acceleration"
 for i in {1..10}
 do
-    MESSAGE="{\"acceleration\": $((i * 10))}"
+    MESSAGE="{\"accel\": $((i * 10))}"
+    # MESSAGE="{\"acceleration\": $((i * 10))}"
     echo "Publishing: $MESSAGE"
     mosquitto_pub -h $BROKER -t $TOPIC -m "$MESSAGE"
     sleep 1

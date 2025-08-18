@@ -25,7 +25,7 @@ impl Processor for FusionStage {
     }
 
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
-        for (name, input) in context.inputs.iter_mut() {
+        for (_name, input) in context.inputs.iter_mut() {
             if let Some(message) = input.recv().await {
                 if let Some(output_info) = &context.output {
                     let _ = output_info.channel.publish(message).await;

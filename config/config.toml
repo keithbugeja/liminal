@@ -18,20 +18,26 @@
 # channel = { type = "broadcast", capacity = 256 }
 # parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 10000 }
 
-[inputs.mqtt_temp]
+[inputs.mqtt_acceleration]
 type = "mqtt_sub"
 output = "raw_acceleration_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "acceleration", broker_url = "mqtt://localhost:1883", topics = ["test/acceleration"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
+parameters = { broker_url = "mqtt://localhost:1883", topics = ["test/acceleration"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
 
 # Pipelines: MQTT data processing
 [pipelines.mqtt_pipeline]
 description = "Processes MQTT acceleration data"
 
+[pipelines.mqtt_pipeline.stages.rename_acceleration]
+type = "rename"
+inputs = ["raw_acceleration_data"]
+output = "acceleration_data"
+parameters = { fields_in = ["accel"], fields_out = ["acceleration"] }
+
 [pipelines.mqtt_pipeline.stages.lowpass_acceleration]
 type = "lowpass"
-inputs = ["raw_acceleration_data"]
+inputs = ["acceleration_data"]
 output = "filtered_acceleration"
 parameters = { field_in = "acceleration", field_out = "filtered_acceleration", threshold = 100 }
 

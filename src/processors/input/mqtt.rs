@@ -1,9 +1,8 @@
 use crate::processors::Processor;
-
 use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfig};
+use crate::config::ProcessorConfig;
 use crate::core::message::Message;
 use crate::core::context::ProcessingContext;
-use crate::config::ProcessorConfig;
 use crate::core::time::now_millis;
 
 use async_trait::async_trait;
@@ -35,6 +34,9 @@ impl ProcessorConfig for MqttInputConfig {
         let clean_session = extract_param(&config.parameters, "clean_session", true);
         let username = extract_param(&config.parameters, "username", None);
         let password = extract_param(&config.parameters, "password", None); 
+        
+        // Field configuration will be removed. Any payload parameter renaming should be handled by 
+        // a separate rename processor. Will be changing this to None in the future.
         let field_config = extract_field_params(&config.parameters);
 
         Ok(Self {
@@ -138,6 +140,8 @@ impl Processor for MqttInputProcessor {
         self.client = Some(client);
         self.event_loop = Some(Mutex::new(eventloop));
 
+        tracing::info!("Field configuration: {:?}", self.config.field_config);
+
         tracing::info!("MQTT subscriber '{}' initialised", self.name);
         Ok(())  
     }
@@ -191,7 +195,7 @@ impl Processor for MqttInputProcessor {
                     if let Err(e) = output_info.channel.publish(message).await {
                         tracing::warn!("Downstream publish failed: {:?}", e);
                     } else {
-                        tracing::info!("Received MQTT message from topic: {}", topic);
+                        tracing::info!("Received MQTT message from topic: {}", topic); // Might downcast to debug later
                     }    
                 }
             }

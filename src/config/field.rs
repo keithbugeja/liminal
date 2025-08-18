@@ -212,7 +212,7 @@ impl FieldConfig {
     /// 
     /// # Returns
     /// `true` if the configuration is compatible, `false` otherwise
-    pub fn is_compatible_with_processor(&self, processor_type: &str) -> bool {
+    pub fn is_compatible_with_processor(&self, _processor_type: &str) -> bool {
         // To make this implementation extensible and as general as possible,
         // I'll look at it as soon as I have ironed out the registration of
         // processors with metadata.

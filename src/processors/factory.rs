@@ -62,10 +62,22 @@
 
 use crate::processors::{ 
     Processor,
-    input::SimulatedSignalProcessor,    
-    transform::{ScaleProcessor, LowPassProcessor},
-    aggregator::FusionStage,
-    output::{ConsoleOutputProcessor, FileOutputProcessor},
+    input::{
+        MqttInputProcessor, 
+        SimulatedSignalProcessor,
+    },
+    transform::{
+        RenameProcessor, 
+        ScaleProcessor, 
+        LowPassProcessor
+    },
+    aggregator::{
+        FusionStage,
+    },
+    output::{
+        ConsoleOutputProcessor, 
+        FileOutputProcessor,
+    },
 };
 
 use crate::config::StageConfig;
@@ -204,8 +216,9 @@ pub fn register_processor(name: &str, constructor: ProcessorConstructor) {
 fn ensure_default_processors() {
     static INITIALIZED: OnceLock<()> = OnceLock::new();
     INITIALIZED.get_or_init(|| {
-        register_processor("mqtt_sub", Box::new(crate::processors::input::MqttInputProcessor::new));
+        register_processor("mqtt_sub", Box::new(MqttInputProcessor::new));
         register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
+        register_processor("rename", Box::new(RenameProcessor::new));
         register_processor("lowpass", Box::new(LowPassProcessor::new));
         register_processor("scale", Box::new(ScaleProcessor::new));
         register_processor("fusion", Box::new(FusionStage::new));

@@ -70,7 +70,7 @@ use toml;
 /// 
 /// ## TOML Parsing Errors
 /// - **Syntax errors**: Malformed TOML syntax (missing quotes, brackets, etc.)
-/// - **Type mismatches**: Values that can't be deserialized to expected types
+/// - **Type mismatches**: Values that can't be deserialised to expected types
 /// - **Missing required fields**: TOML doesn't contain expected structure
 /// 
 /// ## Validation Errors

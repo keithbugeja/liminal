@@ -1,9 +1,8 @@
 use crate::processors::Processor;
-
 use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfig};
+use crate::config::ProcessorConfig;
 use crate::core::message::Message;
 use crate::core::context::ProcessingContext;
-use crate::config::ProcessorConfig;
 use crate::core::time::now_millis;
 
 use async_trait::async_trait;
@@ -121,6 +120,13 @@ impl Processor for SimulatedSignalProcessor {
                     payload: serde_json::json!({ &self.config.value_name : value }), // Fix: use value, not 1
                     timestamp: now,
                 };
+
+                tracing::debug!(
+                    "Simulated signal generated: {} = {}, at {}",
+                    self.config.value_name,
+                    value,
+                    now
+                );
 
                 if let Some(output_info) = &context.output {
                     let _ = output_info.channel.publish(message).await;

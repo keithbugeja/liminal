@@ -90,6 +90,12 @@ impl Processor for ScaleProcessor {
                                 timestamp: message.timestamp,
                             };
 
+                            tracing::debug!(
+                                "Scaled message published to topic '{}': {:?}",
+                                output_info.name,
+                                scaled_message
+                            );
+
                             let _ = output_info.channel.publish(scaled_message).await;
                         }
                     }
