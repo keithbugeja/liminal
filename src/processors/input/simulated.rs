@@ -4,10 +4,10 @@ use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfi
 use crate::core::message::Message;
 use crate::core::context::ProcessingContext;
 use crate::config::ProcessorConfig;
+use crate::core::time::now_millis;
 
 use async_trait::async_trait;
 use rand_distr::{Distribution, Normal, Uniform};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Duration;
 
 #[derive(Debug, Clone)]
@@ -107,7 +107,7 @@ impl Processor for SimulatedSignalProcessor {
 
         tokio::select! {
             _ = tokio::time::sleep(Duration::from_millis(self.config.interval_ms)) => {
-                let now = SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis() as u64;
+                let now = now_millis();
 
                 let topic = if let Some(output_info) = &context.output {
                     output_info.name.clone()

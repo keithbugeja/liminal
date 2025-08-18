@@ -4,13 +4,15 @@ use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfi
 use crate::core::message::Message;
 use crate::core::context::ProcessingContext;
 use crate::config::ProcessorConfig;
+use crate::core::time::now_millis;
 
 use async_trait::async_trait;
 use rumqttc::{AsyncClient, MqttOptions, Event, Packet, QoS};
 use serde_json::Value;
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::Duration;
 use tokio::sync::Mutex;
+
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 
 #[derive(Debug, Clone)]
 pub struct MqttInputConfig {
@@ -48,19 +50,15 @@ impl ProcessorConfig for MqttInputConfig {
     }
 
     fn validate(&self) -> anyhow::Result<()> {
-        println!("{:?}", self);
-
         if self.qos > 2 {
             return Err(anyhow::anyhow!("QoS must be between 0 and 2"));
         }
-
         if self.broker_url.is_empty() {
             return Err(anyhow::anyhow!("Broker URL cannot be empty"));
         }
         if self.topics.is_empty() {
             return Err(anyhow::anyhow!("At least one topic must be specified"));
         }
-        
         Ok(())
     }       
 }
@@ -87,22 +85,24 @@ impl MqttInputProcessor {
 
     fn parse_broker_url(&self) -> anyhow::Result<(String, u16)> {
         let url = &self.config.broker_url;
-        
-        // Handle mqtt:// prefix
-        let clean_url = if url.starts_with("mqtt://") {
-            &url[7..]
-        } else {
-            url
-        };
+        let clean_url = if url.starts_with("mqtt://") { &url[7..] } else { url };
 
-        // Split host and port
         if let Some(colon_pos) = clean_url.find(':') {
             let host = clean_url[..colon_pos].to_string();
             let port = clean_url[colon_pos + 1..].parse::<u16>()
                 .map_err(|_| anyhow::anyhow!("Invalid port in broker URL: {}", url))?;
             Ok((host, port))
         } else {
-            Ok((clean_url.to_string(), 1883)) // Default MQTT port
+            Ok((clean_url.to_string(), 1883))
+        }
+    }
+
+    fn qos(&self) -> QoS {
+        match self.config.qos {
+            0 => QoS::AtMostOnce,
+            1 => QoS::AtLeastOnce,
+            2 => QoS::ExactlyOnce,
+            _ => QoS::AtMostOnce,
         }
     }    
 }
@@ -110,37 +110,28 @@ impl MqttInputProcessor {
 #[async_trait]
 impl Processor for MqttInputProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        // Parse broker URL
         let (host, port) = self.parse_broker_url()?;
 
-        // Generate client ID if not provided
-        let client_id = self.config.client_id.clone()
+        let client_id = self
+            .config
+            .client_id
+            .clone()
             .unwrap_or_else(|| format!("liminal_{}", uuid::Uuid::new_v4()));
 
-        // Create MQTT options
         let mut mqttoptions = MqttOptions::new(&client_id, host, port);
         mqttoptions.set_clean_session(self.config.clean_session);
 
-        // Set credentials if provided
         if let (Some(username), Some(password)) = (&self.config.username, &self.config.password) {
             mqttoptions.set_credentials(username, password);
         }
 
-        // Create client and event loop
         let (client, eventloop) = AsyncClient::new(mqttoptions, 10);
-        
-        // Subscribe to topics
+                
         for topic in &self.config.topics {
-            let qos = match self.config.qos {
-                0 => QoS::AtMostOnce,
-                1 => QoS::AtLeastOnce,
-                2 => QoS::ExactlyOnce,
-                _ => QoS::AtMostOnce,
-            };
-            
-            client.subscribe(topic, qos).await
+            client
+                .subscribe(topic, self.qos())
+                .await
                 .map_err(|e| anyhow::anyhow!("Failed to subscribe to topic '{}': {}", topic, e))?;
-            
             tracing::info!("Subscribed to MQTT topic: {} (QoS: {})", topic, self.config.qos);
         }
 
@@ -152,63 +143,56 @@ impl Processor for MqttInputProcessor {
     }
 
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
-
         if let Some(ref event_loop_mutex) = self.event_loop {
-            let mut eventloop = event_loop_mutex.lock().await;
-
-            // Poll the MQTT event loop
-            tokio::select! {
-                event_result = eventloop.poll() => {
-                    match event_result {
-                        Ok(Event::Incoming(Packet::Publish(publish))) => {
-                            let topic = publish.topic.clone();
-                            let payload_bytes = publish.payload.to_vec();
-                            
-                            // Try to parse payload as JSON, fallback to string
-                            let payload = match serde_json::from_slice::<Value>(&payload_bytes) {
-                                Ok(json_value) => json_value,
-                                Err(_) => {
-                                    // If not valid JSON, store as string
-                                    match String::from_utf8(payload_bytes) {
-                                        Ok(string_value) => Value::String(string_value),
-                                        Err(_) => {
-                                            // If not valid UTF-8, store as base64
-                                            Value::String(base64::encode(&publish.payload))
-                                        }
-                                    }
-                                }
-                            };
-
-                            let now = SystemTime::now()
-                                .duration_since(UNIX_EPOCH)
-                                .unwrap()
-                                .as_millis() as u64;
-
-                            tracing::info!("Message payload: {:?}", payload);
-
-                            if let Some(output_info) = &context.output {
-                                let message = Message {
-                                    source: self.name.clone(),
-                                    topic: output_info.name.clone(),
-                                    payload,
-                                    timestamp: now,
-                                };
-
-                                let _ = output_info.channel.publish(message).await;
-                                tracing::info!("Received MQTT message from topic: {}", topic);
+            // Changing logic to poll under the lock but then drop it before
+            // any downstram awaits, to avoid convoying stages.
+            let (maybe_topic, maybe_payload_bytes) = {
+                let mut eventloop = event_loop_mutex.lock().await;
+            
+                tokio::select! {
+                    event_result = eventloop.poll() => {
+                        match event_result {
+                            Ok(Event::Incoming(Packet::Publish(publish))) => {
+                                (Some(publish.topic.clone()), Some(publish.payload.to_vec()))
+                            }
+                            Ok(_) => (None, None),
+                            Err(e) => {
+                                tracing::error!("MQTT connection error: {}", e);
+                                (None, None)
                             }
                         }
-                        Ok(_) => {
-                            // Todo: Other MQTT events (connect, disconnect, etc.)
-                        }
-                        Err(e) => {
-                            tracing::error!("MQTT connection error: {}", e);
-                            // Perhaps we could implement reconnection logic here?
-                        }
                     }
+                    _ = tokio::time::sleep(Duration::from_millis(100)) => (None, None),
                 }
-                _ = tokio::time::sleep(Duration::from_millis(100)) => {
-                    // No messages received, continue polling
+            };
+
+            // Process downstream messages, if any
+            if let (Some(topic), Some(payload_bytes)) = (maybe_topic, maybe_payload_bytes) {
+                let payload = match serde_json::from_slice::<Value>(&payload_bytes) {
+                    Ok(json_value) => json_value,
+                    Err(_) => match std::str::from_utf8(&payload_bytes) {
+                        Ok(s) => Value::String(s.to_owned()),
+                        Err(_) => Value::String(BASE64.encode(&payload_bytes)),
+                    }
+                };
+
+                let now = now_millis();
+
+                tracing::debug!("MQTT '{}' payload: {},", topic, payload);
+
+                if let Some(output_info) = &context.output {
+                    let message = Message {
+                        source: self.name.clone(),
+                        topic: output_info.name.clone(),
+                        payload,
+                        timestamp: now,
+                    };
+
+                    if let Err(e) = output_info.channel.publish(message).await {
+                        tracing::warn!("Downstream publish failed: {:?}", e);
+                    } else {
+                        tracing::info!("Received MQTT message from topic: {}", topic);
+                    }    
                 }
             }
         }

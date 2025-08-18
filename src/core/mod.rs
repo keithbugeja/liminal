@@ -4,3 +4,4 @@ pub mod pipeline;
 pub mod registry;
 pub mod stage;
 pub mod context;
+pub mod time;
