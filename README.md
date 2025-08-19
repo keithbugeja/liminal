@@ -1,406 +1,302 @@
 # Liminal
 
-A flexible data processing pipeline framework built in Rust for real-time stream processing. Liminal lets you build complex data flows using simple configuration files, handling everything from data ingestion to transformation and output.
+A high-performance, configurable data processing pipeline framework written in Rust. Liminal enables real-time data transformation, filtering, and routing through a modular stage-based architecture.
 
-## What it does
+## Goals
 
-Liminal processes data streams through configurable pipelines. You define your data flow in TOML configuration files, and Liminal handles the rest - message routing, backpressure, error handling, and concurrent processing.
+- **Real-time Processing**: Handle continuous data streams with minimal latency
+- **Modular Architecture**: Compose complex pipelines from reusable processing stages
+- **High Performance**: Leverage Rust's performance and safety for data-intensive workloads
+- **Flexible Configuration**: Define pipelines declaratively using TOML configuration
+- **Extensible**: Easy-to-add custom processors for domain-specific needs
 
-Think of it like connecting data processing blocks together:
-- **Input processors** generate or collect data (simulated sensors, file readers, APIs, MQTT brokers)
-- **Transform processors** modify data as it flows through (scaling, filtering, aggregation)  
-- **Output processors** send results somewhere useful (files, databases, dashboards, MQTT publishers)
+## Features
 
-Pipelines can run locally or be distributed across multiple machines using socket-based communication (in progress), letting you scale processing horizontally and connect remote data sources.
+### Input Processors
+- **MQTT Input**: Subscribe to MQTT topics for IoT data ingestion
+- **Simulated Input**: Generate synthetic data for testing and development
 
-## Quick start
+### Transform Processors
+- **Low-pass Filter**: Apply threshold-based filtering to numeric data
+- **Scale Transform**: Scale numeric values by configurable factors
+- **Rename Transform**: Map and rename fields in data messages
+- **Fusion Aggregator**: Combine multiple data streams
 
-Here's a simple pipeline that generates sensor data, scales it, and logs the results:
+### Output Processors
+- **Console Output**: Display processed data to stdout
+- **File Output**: Write data to files with configurable formatting
+- **MQTT Output**: Publish processed data to MQTT topics
 
-```toml
-# config.toml
-[inputs.temperature_sensor]
-type = "simulated"
-output = "raw_temp"
-parameters = { field_out = "temperature", interval_ms = 1000, min_value = 15.0, max_value = 35.0 }
+### Core Features
+- **Multi-threading**: Configurable concurrency per stage
+- **Channel Types**: Broadcast and MPSC channels for different communication patterns
+- **Field Mapping**: Flexible field transformation and renaming
+- **Error Handling**: Robust error propagation and logging
+- **Hot Configuration**: Declarative pipeline configuration via TOML
 
-[pipelines.processing.stages.scale_temp]
-type = "scale"
-inputs = ["raw_temp"]
-output = "scaled_temp"
-parameters = { field_in = "temperature", field_out = "temp_fahrenheit", scale_factor = 1.8 }
+## Quick Start
 
-[outputs.console]
-type = "console"
-inputs = ["scaled_temp"]
-```
+### Prerequisites
 
-Run it with:
+- Rust 1.70 or later
+- (Optional) Docker for MQTT broker testing
+
+### Installation
+
 ```bash
-cargo run -- config.toml
+git clone https://github.com/keithbugeja/liminal.git
+cd liminal
+cargo build --release
 ```
 
-You'll see temperature readings converted from Celsius to Fahrenheit streaming to your console.
+### Running Your First Pipeline
 
-## Core concepts
+1. **Start an MQTT broker** (for MQTT examples):
+```bash
+# Using Docker
+docker run -it -p 1883:1883 eclipse-mosquitto
 
-### Stages and pipelines
+# Or using Homebrew on macOS
+brew install mosquitto
+mosquitto -v
+```
 
-Data flows through **stages** connected by **channels**. Each stage runs independently and processes messages at its own pace.
-
-- **Input stages** create data (sensors, file readers, network sources, MQTT subscribers)
-- **Pipeline stages** transform data (math operations, filtering, aggregation)
-- **Output stages** consume data (logging, file writing, network publishing, MQTT publishers)
-
-### Distributed processing
-
-Liminal will support distributed processing by connecting pipelines across multiple machines using socket-based input/output endpoints. This lets you:
-
-- Scale processing across multiple nodes
-- Connect remote data sources and sinks
-- Build fault-tolerant distributed systems
-- Separate data collection, processing, and storage
-
+2. **Configure a pipeline** in `config/config.toml`:
 ```toml
-# Machine A: Data collection
-[inputs.sensor_farm]
-type = "mqtt"
-parameters = { broker = "mqtt://sensors.local", topic = "farm/+/data" }
+[inputs.mqtt_sensor]
+type = "mqtt_sub"
+output = "raw_sensor_data"
+concurrency = { type = "thread" }
+channel = { type = "broadcast", capacity = 256 }
 
-[outputs.processing_node]
-type = "socket"
-inputs = ["sensor_farm"]
-parameters = { endpoint = "tcp://processing.local:9001" }
+[inputs.mqtt_sensor.parameters]
+broker_url = "mqtt://localhost:1883"
+topics = ["sensors/temperature"]
+client_id = "liminal_input"
+qos = 0
 
-# Machine B: Data processing  
-[inputs.from_collectors]
-type = "socket"
-parameters = { bind = "tcp://0.0.0.0:9001" }
+[pipelines.sensor_pipeline]
+description = "Process sensor data"
 
-[pipelines.analytics.stages.aggregate]
-type = "window_aggregate"
-inputs = ["from_collectors"]
-output = "aggregated"
+[pipelines.sensor_pipeline.stages.filter_values]
+type = "lowpass"
+inputs = ["raw_sensor_data"]
+output = "filtered_data"
 
-[outputs.storage_node]
-type = "socket"
-inputs = ["aggregated"]
-parameters = { endpoint = "tcp://storage.local:9002" }
+[pipelines.sensor_pipeline.stages.filter_values.parameters]
+field_in = "temperature"
+field_out = "filtered_temperature"
+threshold = 0.0
+
+[pipelines.sensor_pipeline.stages.console_out]
+type = "console"
+inputs = ["filtered_data"]
 ```
 
-### Messages
-
-Everything flows as JSON messages with this structure:
-```json
-{
-  "source": "temperature_sensor",
-  "topic": "raw_temp", 
-  "payload": {"temperature": 23.5},
-  "timestamp": 1640995200000
-}
+3. **Run Liminal**:
+```bash
+cargo run
 ```
 
-### Channels
-
-Stages communicate through channels that handle different delivery patterns:
-- **Broadcast**: Fast fan-out, may drop messages for slow consumers
-- **Direct**: Reliable point-to-point delivery
-- **Shared**: Load balancing across multiple consumers
-- **Fanout**: Reliable delivery to all subscribers
+4. **Send test data**:
+```bash
+mosquitto_pub -h localhost -t sensors/temperature -m '{"temperature": 23.5}'
+```
 
 ## Configuration
 
-Liminal uses TOML configuration files with three main sections:
+Liminal uses TOML configuration files to define processing pipelines. The main configuration file is `config/config.toml`.
 
-### Inputs
-```toml
-[inputs.sensor_data]
-type = "simulated"
-output = "raw_readings"
-parameters = { 
-  field_out = "value",
-  distribution = "normal",
-  min_value = 0.0,
-  max_value = 100.0,
-  interval_ms = 500
-}
-
-# MQTT input (planned)
-[inputs.iot_devices]
-type = "mqtt"
-output = "device_data"
-parameters = {
-  broker = "mqtt://broker.local:1883",
-  topic = "devices/+/telemetry",
-  qos = 1
-}
-
-# Socket input for distributed processing (planned)
-[inputs.remote_data]
-type = "socket"
-output = "network_stream"
-parameters = {
-  bind = "tcp://0.0.0.0:9000",
-  format = "json"
-}
-```
-
-### Pipelines
-```toml
-[pipelines.data_processing.stages.filter]
-type = "lowpass"
-inputs = ["raw_readings"]
-output = "filtered_data"
-parameters = { 
-  field_in = "value", 
-  field_out = "filtered_value",
-  threshold = 50.0
-}
-```
-
-### Outputs
-```toml
-[outputs.file_logger]
-type = "file"
-inputs = ["filtered_data"]
-parameters = {
-  file_path = "logs/output.jsonl",
-  format = "json",
-  append = true
-}
-
-# MQTT output (planned)
-[outputs.telemetry_publisher]
-type = "mqtt"
-inputs = ["processed_data"]
-parameters = {
-  broker = "mqtt://telemetry.local:1883",
-  topic_template = "results/{{source}}/{{field}}",
-  qos = 1,
-  retain = false
-}
-
-# Socket output for distributed processing (planned)
-[outputs.next_stage]
-type = "socket"
-inputs = ["filtered_data"]
-parameters = {
-  endpoint = "tcp://analytics.local:9001",
-  format = "json"
-}
-```
-
-## Built-in processors
-
-### Input processors
-- **simulated**: Generate synthetic data with configurable distributions
-- **file**: Read data from files (planned)
-- **http**: HTTP endpoint data source (planned)
-- **mqtt**: Subscribe to MQTT topics (planned)
-- **socket**: Receive data over TCP/UDP sockets (planned)
-
-### Transform processors  
-- **scale**: Multiply values by a constant factor
-- **lowpass**: Filter values below a threshold
-- **aggregate**: Combine multiple values (planned)
-- **window**: Time-based windowing operations (planned)
-
-### Output processors
-- **console**: Print messages to stdout
-- **file**: Write to files in JSON, CSV, or text format
-- **http**: POST to HTTP endpoints (planned)
-- **mqtt**: Publish to MQTT topics (planned)
-- **socket**: Send data over TCP/UDP sockets (planned)
-
-## Distributed architecture patterns
-
-### Edge-to-cloud processing
-```toml
-# Edge device: Collect and preprocess
-[inputs.local_sensors]
-type = "simulated"
-parameters = { interval_ms = 100 }
-
-[pipelines.edge.stages.smooth]
-type = "moving_average"
-inputs = ["local_sensors"]
-output = "smoothed"
-
-[outputs.to_cloud]
-type = "socket"
-inputs = ["smoothed"]
-parameters = { endpoint = "tcp://cloud.example.com:9000" }
-
-# Cloud: Analytics and storage
-[inputs.from_edge]
-type = "socket"
-parameters = { bind = "tcp://0.0.0.0:9000" }
-
-[pipelines.analytics.stages.detect_anomalies]
-type = "anomaly_detector"
-inputs = ["from_edge"]
-output = "alerts"
-```
-
-### Fan-out processing
-```toml
-# Central collector
-[inputs.data_source]
-type = "mqtt"
-parameters = { broker = "mqtt://central", topic = "data/+" }
-
-# Distribute to specialized processors
-[outputs.processor_a]
-type = "socket"
-inputs = ["data_source"]
-parameters = { endpoint = "tcp://proc-a:9000" }
-
-[outputs.processor_b] 
-type = "socket"
-inputs = ["data_source"]
-parameters = { endpoint = "tcp://proc-b:9000" }
-```
-
-## Field mapping
-
-Processors use flexible field mapping to work with your data structure:
+### Configuration Structure
 
 ```toml
-# Single field transformation
-parameters = { field_in = "temperature", field_out = "temp_celsius" }
+# Input sources
+[inputs.input_name]
+type = "processor_type"
+output = "channel_name"
+concurrency = { type = "thread" }  # or "async"
+channel = { type = "broadcast", capacity = 256 }
 
-# Multiple parallel fields  
-parameters = { fields_in = ["temp", "humidity"], fields_out = ["temp_c", "humidity_pct"] }
+[inputs.input_name.parameters]
+# processor-specific config here
 
-# Custom mapping
-parameters = { field_mapping = { "sensor_1" = "temperature", "sensor_2" = "pressure" } }
+# Processing pipelines
+[pipelines.pipeline_name]
+description = "Pipeline description"
+
+[pipelines.pipeline_name.stages.stage_name]
+type = "processor_type"
+inputs = ["input_channel"]
+output = "output_channel"
+
+[pipelines.pipeline_name.stages.stage_name.parameters]
+# processor-specific config here
+
+# Output sinks
+[outputs.output_name]
+type = "processor_type"
+inputs = ["input_channel"]
+
+[outputs.output_name.parameters]
+# processor-specific config here
 ```
 
-## Building and running
+### Field Configuration
 
-```bash
-# Development
-cargo run -- config.toml
+Most processors support field mapping for data transformation:
 
-# Release build
-cargo build --release
-./target/release/liminal config.toml
+```toml
+# Single field mapping
+[stage.parameters]
+field_in = "raw_temp"
+field_out = "temperature"
 
-# With logging
-RUST_LOG=info cargo run -- config.toml
-
-# Distributed setup
-# Terminal 1: Data collector
-./liminal collector.toml
-
-# Terminal 2: Data processor  
-./liminal processor.toml
-
-# Terminal 3: Data storage
-./liminal storage.toml
+# Multiple field mapping
+[stage.parameters]
+fields_in = ["temp", "humidity"]
+fields_out = ["temperature", "humidity_pct"]
 ```
 
-## Examples
+## Adding Custom Processors
 
-Check the `config/` directory for example configurations:
-
-- `config.toml`: Basic sensor simulation with scaling and filtering
-- `multi-pipeline.toml`: Multiple parallel processing chains
-- `file-output.toml`: Writing results to various file formats (planned)
-- `distributed.toml`: Multi-node processing setup (planned)
-- `mqtt-bridge.toml`: MQTT integration examples (planned)
-
-## Architecture
-
-Liminal is built around a few key principles:
-
-- **Async-first**: Everything uses async/await for efficient I/O
-- **Type-safe configuration**: TOML configs are validated at startup
-- **Backpressure handling**: Slow consumers don't break the whole pipeline
-- **Distributed-ready**: Socket-based endpoints for multi-node deployment
-- **Protocol-agnostic**: Support for various transport protocols (TCP, UDP, MQTT)
-- **Extensible**: Easy to add new processor types
-- **Observable**: Built-in logging and metrics (coming soon)
-
-The core loop is simple:
-1. Load and validate configuration
-2. Create channels and wire up stages  
-3. Start all processors concurrently
-4. Handle messages flowing between stages
-5. Gracefully shutdown on signals
-
-For distributed setups, socket endpoints handle serialisation, network transport, and reconnection automatically.
-
-## Adding custom processors
-
-Create a new processor by implementing the `Processor` trait:
+### 1. Create a New Processor
 
 ```rust
+use crate::processors::Processor;
+use crate::config::{ProcessorConfig, StageConfig};
+use crate::core::{ProcessingContext, Message};
+use async_trait::async_trait;
+
+#[derive(Debug, Clone)]
+pub struct MyProcessorConfig {
+    // Your configuration fields
+}
+
+impl ProcessorConfig for MyProcessorConfig {
+    fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
+        // Parse configuration from TOML
+        Ok(Self { /* ... */ })
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        // Validate configuration
+        Ok(())
+    }
+}
+
 pub struct MyProcessor {
     name: String,
-    config: MyConfig,
+    config: MyProcessorConfig,
+}
+
+impl MyProcessor {
+    pub fn new(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        let processor_config = MyProcessorConfig::from_stage_config(&config)?;
+        processor_config.validate()?;
+        
+        Ok(Box::new(Self {
+            name: name.to_string(),
+            config: processor_config,
+        }))
+    }
 }
 
 #[async_trait]
 impl Processor for MyProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        // Setup code
+        tracing::info!("MyProcessor '{}' initialised", self.name);
+        Ok(())
     }
-    
+
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
-        // Process incoming messages
-        for (channel_name, input) in context.inputs.iter_mut() {
-            while let Some(message) = input.try_recv().await {
-                // Transform the message
-                let result = transform(message.payload);
-                
-                // Send to output
-                if let Some(output) = &context.output {
-                    output.channel.publish(result).await?;
-                }
-            }
-        }
+        // Your processing logic here
         Ok(())
     }
 }
 ```
 
-Register it in `src/processors/mod.rs` and you're ready to use it in configs.
+### 2. Register the Processor
 
-## Roadmap
+Add your processor to the factory in `src/processors/factory.rs`:
 
-**Network protocols**
-- MQTT input/output processors for IoT integration
-- TCP/UDP socket processors for custom protocols
-- HTTP endpoints for REST API integration
+```rust
+fn ensure_default_processors() {
+    static INITIALIZED: OnceLock<()> = OnceLock::new();
+    INITIALIZED.get_or_init(|| {
+        // ... existing processors ...
+        register_processor("my_processor", Box::new(MyProcessor::new));
+    });
+}
+```
 
-**Distributed processing**  
-- Automatic service discovery and load balancing
-- Fault tolerance and automatic failover
-- Configuration synchronisation across nodes
+### 3. Add to Module
 
-**Advanced processing**
-- Time-based windowing and aggregation
-- Stream joins and complex event processing
-- Machine learning inference integration
+Update the appropriate module file (`src/processors/input/mod.rs`, `src/processors/transform/mod.rs`, or `src/processors/output/mod.rs`):
 
-**Operations**
-- Built-in metrics and health monitoring
-- Configuration hot-reloading
-- Performance profiling and optimisation tools
+```rust
+pub mod my_processor;
+pub use my_processor::MyProcessor;
+```
 
-## License
+## Development
 
-MIT License - see LICENSE file for details.
+### Running Tests
+
+```bash
+cargo test
+```
+
+### Generating Test Data
+
+Use the included message generator for MQTT testing:
+
+```bash
+chmod +x test/message_gen.sh
+./test/message_gen.sh
+```
+
+### Debugging
+
+Set logging level to debug for detailed output:
+
+```rust
+logging::init_logging("debug");
+```
+
+## Examples
+
+See the `config/examples/` directory for complete configuration examples:
+
+- `config_mqtt_sim.toml`: MQTT input with simulated data processing
 
 ## Contributing
 
-This is an experimental project exploring real-time data processing patterns in Rust. Ideas, feedback, and contributions welcome!
+1. Fork the repository
+2. Create a feature branch
+3. Add tests for new functionality
+4. Ensure `cargo test` and `cargo clippy` pass
+5. Submit a pull request
 
-Areas that could use help:
-- MQTT and socket-based input/output processors
-- Distributed coordination and service discovery
-- Advanced transformation processors (windowing, aggregation, ML)
-- Performance optimisation and benchmarking
-- Better error handling and recovery
-- Metrics and monitoring integration
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Architecture
+
+Liminal uses a message-passing architecture where:
+
+- **Messages** carry data with source, topic, payload, and timestamp
+- **Channels** provide communication between stages (broadcast/MPSC)
+- **Processors** transform data and forward to output channels
+- **Pipelines** compose processors into data processing workflows
+- **Configuration** defines the complete system declaratively
+
+This design enables high-throughput, low-latency processing with clear separation of concerns.
+
+## Related Projects
+
+- **Liminal Firmware**: [Firmware for various sensors and microcontrollers that provide data to **Liminal**](https://github.com/keithbugeja/liminal-firmware) 
+
+---
+
+For questions or support, please open an issue in this repository.

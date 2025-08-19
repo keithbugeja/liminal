@@ -23,25 +23,33 @@ type = "mqtt_sub"
 output = "raw_acceleration_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
-parameters = { broker_url = "mqtt://localhost:1883", topics = ["test/acceleration"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
+# Uncomment the following line to read synthetic acceleration data from MQTT (message_gen.sh)
+# parameters = { broker_url = "mqtt://localhost:1883", topics = ["test/acceleration"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
 
-# Pipelines: MQTT data processing
-[pipelines.mqtt_pipeline]
-description = "Processes MQTT acceleration data"
+# Reading MPU6500 accelerometer data from MQTT
+parameters = { broker_url = "mqtt://localhost:1883", topics = ["sensors/mpu6500/accelerometer"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
 
-[pipelines.mqtt_pipeline.stages.rename_acceleration]
-type = "rename"
-inputs = ["raw_acceleration_data"]
-output = "acceleration_data"
-parameters = { fields_in = ["accel"], fields_out = ["acceleration"] }
+#
+# Pipelines: MQTT data processing (uncomment to enable synthetic acceleration data processing)
+#
+# [pipelines.mqtt_pipeline]
+# description = "Processes MQTT acceleration data"
 
-[pipelines.mqtt_pipeline.stages.lowpass_acceleration]
-type = "lowpass"
-inputs = ["acceleration_data"]
-output = "filtered_acceleration"
-parameters = { field_in = "acceleration", field_out = "filtered_acceleration", threshold = 100 }
+# [pipelines.mqtt_pipeline.stages.rename_acceleration]
+# type = "rename"
+# inputs = ["raw_acceleration_data"]
+# output = "acceleration_data"
+# parameters = { fields_in = ["accel"], fields_out = ["acceleration"] }
 
-# Pipelines: Simulated data processing
+# [pipelines.mqtt_pipeline.stages.lowpass_acceleration]
+# type = "lowpass"
+# inputs = ["raw_acceleration_data"]
+# output = "filtered_acceleration"
+# parameters = { field_in = "acceleration", field_out = "filtered_acceleration", threshold = 100 }
+
+#
+# Pipelines: Simulated data processing (uncomment to enable simulated temperatureprocessing)
+#
 # [pipelines.simulated_pipeline]
 # description = "Processes simulated temperature data"
 
@@ -57,8 +65,9 @@ parameters = { field_in = "acceleration", field_out = "filtered_acceleration", t
 # output = "filtered_temperature"
 # parameters = { field_in = "temperature_fahrenheit", field_out = "filtered_temperature", threshold = 50 }
 
-
-# Pipelines: Simulated data processing
+#
+# Pipelines: Simulated data processing (uncomment to enable simulated humidity processing)
+#
 # [pipelines.simulated_pipeline_humidity]
 # description = "Processes simulated humidity data"
 
@@ -68,12 +77,18 @@ parameters = { field_in = "acceleration", field_out = "filtered_acceleration", t
 # output = "scaled_humidity"
 # parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_factor = 2.0 }
 
-
 # Outputs: External data sinks
 [outputs.log_output]
 type = "console"
+
+# Uncomment for data from simulated temperature and humidity sources
 # inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity", "filtered_acceleration"]
-inputs = ["filtered_acceleration"]
+
+# Uncomment for data from MQTT/synthetic accelerometer
+# inputs = ["filtered_acceleration"]
+
+# Accelerator data output from MQTT/MPU6500
+inputs = ["raw_acceleration_data"]
 # parameters = { destination = "file://logs/simulated_output.log", format = "json" }
 
 # [outputs.json_logger]
