@@ -251,8 +251,8 @@ cargo test
 Use the included message generator for MQTT testing:
 
 ```bash
-chmod +x test/message_gen.sh
-./test/message_gen.sh
+chmod +x sim/message_gen_mpu6500.sh
+./sim/message_gen_mpu6500.sh
 ```
 
 ### Debugging
