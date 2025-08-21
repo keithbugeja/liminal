@@ -1,0 +1,92 @@
+# LED Control Configuration with Conditional Else Actions
+# Monitors accelerometer magnitude and controls LED blinking using conditional else actions
+# - When magnitude > 1.0: LED blinks rapidly
+# - When magnitude <= 1.0: LED turns off
+
+# Input: Subscribe to sensor data
+[inputs.mqtt_sensors]
+type = "mqtt_sub"
+output = "all_sensor_data"
+channel = { type = "broadcast", capacity = 1000 }
+parameters = { broker_url = "mqtt://localhost:1883", client_id = "liminal_led_control_else", clean_session = true, topics = ["liminal/sensors/+/+"]}
+
+# Pipeline for LED control logic
+[pipelines.led_control]
+description = "Controls LED based on accelerometer magnitude using conditional else"
+
+# Calculate acceleration magnitude and add it to messages
+[pipelines.led_control.stages.magnitude_calculator]
+type = "rule"
+inputs = ["all_sensor_data"]
+output = "magnitude_data"
+channel = { type = "broadcast", capacity = 500 }
+
+[[pipelines.led_control.stages.magnitude_calculator.parameters.rules]]
+# Add magnitude calculation for IMU sensors
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    { type = "compute_field", field_path = "acceleration_magnitude", expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
+]
+
+# LED Controller with conditional else - handles both high and low magnitude in one rule
+[pipelines.led_control.stages.led_controller]
+type = "rule"
+inputs = ["magnitude_data"]
+output = "led_commands"
+channel = { type = "broadcast", capacity = 100 }
+
+[[pipelines.led_control.stages.led_controller.parameters.rules]]
+# When magnitude > 1.0, create blink command; otherwise turn off
+condition = { field_path = "acceleration_magnitude", operation = ">", value = 1.0 }
+# Actions when condition is true (magnitude > 1.0) - Blink LED
+actions = [
+    { type = "set_field", field_path = "blink.on_time", value = 200 },
+    { type = "set_field", field_path = "blink.off_time", value = 200 },
+    # Clean up sensor data - keep only command
+    { type = "remove_field", field_path = "accelerometer" },
+    { type = "remove_field", field_path = "gyroscope" },
+    { type = "remove_field", field_path = "temperature" },
+    { type = "remove_field", field_path = "temperature_unit" },
+    { type = "remove_field", field_path = "timestamp" },
+    { type = "remove_field", field_path = "imu_type" },
+    { type = "remove_field", field_path = "sensor_name" },
+    { type = "remove_field", field_path = "sensor_type" },
+    { type = "remove_field", field_path = "acceleration_magnitude" },
+    { type = "remove_field", field_path = "device_id" }
+]
+# Else actions when condition is false (magnitude <= 1.0) - Turn off LED
+else_actions = [
+    { type = "set_field", field_path = "state", value = false },
+    # Clean up sensor data - keep only command
+    { type = "remove_field", field_path = "accelerometer" },
+    { type = "remove_field", field_path = "gyroscope" },
+    { type = "remove_field", field_path = "temperature" },
+    { type = "remove_field", field_path = "temperature_unit" },
+    { type = "remove_field", field_path = "timestamp" },
+    { type = "remove_field", field_path = "imu_type" },
+    { type = "remove_field", field_path = "sensor_name" },
+    { type = "remove_field", field_path = "sensor_type" },
+    { type = "remove_field", field_path = "acceleration_magnitude" },
+    { type = "remove_field", field_path = "device_id" }
+]
+
+# Output: Send LED commands via MQTT
+[outputs.led_output]
+type = "mqtt_pub"
+inputs = ["led_commands"]
+parameters = { broker_url = "mqtt://localhost:1883", client_id = "liminal_led_controller_else", clean_session = true, default_topic = "liminal/commands/esp32-001/devices/status_led" }
+
+# Optional: Log sensor data for debugging
+[outputs.all_data_log]
+type = "console"
+inputs = ["all_sensor_data"]
+
+# Optional: Log magnitude data for debugging
+[outputs.magnitude_log]
+type = "console"
+inputs = ["magnitude_data"]
+
+# Optional: Log LED commands for debugging
+[outputs.led_commands_log]
+type = "console"
+inputs = ["led_commands"]

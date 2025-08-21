@@ -1,6 +1,15 @@
 # Liminal
 
-A high-performance, configurable data processing pipeline framework written in Rust. Liminal enables real-time data transformation, filtering, and routing through a modular stage-based architecture.
+```
+    ██╗     ██╗███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
+    ██║     ██║████╗ ████║██║████╗  ██║██╔══██╗██║     
+    ██║     ██║██╔████╔██║██║██╔██╗ ██║███████║██║     
+    ██║     ██║██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║     
+    ███████╗██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗
+    ╚══════╝╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝                     
+```
+
+A high-performance, configurable data processing pipeline framework written in Rust. Liminal enables real-time data transformation, filtering, and routing through a modular stage-based architecture that you configure with TOML files.
 
 ## Goals
 
@@ -10,29 +19,21 @@ A high-performance, configurable data processing pipeline framework written in R
 - **Flexible Configuration**: Define pipelines declaratively using TOML configuration
 - **Extensible**: Easy-to-add custom processors for domain-specific needs
 
-## Features
+## Current Processors
+
+Liminal ships with these built-in processors:
 
 ### Input Processors
-- **MQTT Input**: Subscribe to MQTT topics for IoT data ingestion
-- **Simulated Input**: Generate synthetic data for testing and development
+- **MQTT Subscriber** (`mqtt_sub`): Subscribe to MQTT topics and convert messages to internal format
+- **Simulated Data Generator** (`simulated`): Generate synthetic data for testing and development
 
-### Transform Processors
-- **Low-pass Filter**: Apply threshold-based filtering to numeric data
-- **Scale Transform**: Scale numeric values by configurable factors
-- **Rename Transform**: Map and rename fields in data messages
-- **Fusion Aggregator**: Combine multiple data streams
+### Transform Processors  
+- **Rule Processor** (`rule`): Apply conditional transformations with mathematical expressions, field manipulation, and routing logic
 
 ### Output Processors
-- **Console Output**: Display processed data to stdout
-- **File Output**: Write data to files with configurable formatting
-- **MQTT Output**: Publish processed data to MQTT topics
-
-### Core Features
-- **Multi-threading**: Configurable concurrency per stage
-- **Channel Types**: Broadcast and MPSC channels for different communication patterns
-- **Field Mapping**: Flexible field transformation and renaming
-- **Error Handling**: Robust error propagation and logging
-- **Hot Configuration**: Declarative pipeline configuration via TOML
+- **Console Logger** (`console`): Display processed messages to stdout
+- **File Logger** (`file`): Sink processed messages to file
+- **MQTT Publisher** (`mqtt_pub`): Publish messages to MQTT topics
 
 ## Quick Start
 
@@ -61,36 +62,49 @@ brew install mosquitto
 mosquitto -v
 ```
 
-2. **Configure a pipeline** in `config/config.toml`:
+2. **Configure a pipeline** in `config/config.toml` (or try the examples in `config/examples/`):
 ```toml
-[inputs.mqtt_sensor]
+# Input: Subscribe to MQTT sensor data
+[inputs.mqtt_sensors]
 type = "mqtt_sub"
-output = "raw_sensor_data"
-concurrency = { type = "thread" }
-channel = { type = "broadcast", capacity = 256 }
+output = "all_sensor_data"
+channel = { type = "broadcast", capacity = 1000 }
+parameters = { 
+    broker_url = "mqtt://localhost:1883", 
+    client_id = "liminal_rule_test",
+    topics = ["liminal/sensors/+/+"]
+}
 
-[inputs.mqtt_sensor.parameters]
-broker_url = "mqtt://localhost:1883"
-topics = ["sensors/temperature"]
-client_id = "liminal_input"
-qos = 0
+# Pipeline: Process and enrich sensor data  
+[pipelines.mqtt_pipeline]
+description = "Processes MQTT sensor data with rules"
 
-[pipelines.sensor_pipeline]
-description = "Process sensor data"
+[pipelines.mqtt_pipeline.stages.rule_enricher]
+type = "rule"
+inputs = ["all_sensor_data"]
+output = "enriched_data"
+channel = { type = "broadcast", capacity = 500 }
 
-[pipelines.sensor_pipeline.stages.filter_values]
-type = "lowpass"
-inputs = ["raw_sensor_data"]
-output = "filtered_data"
+# Add device metadata for ESP32 devices
+[[pipelines.mqtt_pipeline.stages.rule_enricher.parameters.rules]]
+condition = { field_path = "device_id", operation = "startswith", value = "esp32-" }
+actions = [
+    { type = "set_field", field_path = "device_type", value = "esp32" },
+    { type = "copy_field", source_field = "device_id", target_field = "original_device_id" }
+]
 
-[pipelines.sensor_pipeline.stages.filter_values.parameters]
-field_in = "temperature"
-field_out = "filtered_temperature"
-threshold = 0.0
+# Compute acceleration magnitude from IMU data
+[[pipelines.mqtt_pipeline.stages.rule_enricher.parameters.rules]]
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    { type = "compute_field", field_path = "acceleration_magnitude", 
+      expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
+]
 
-[pipelines.sensor_pipeline.stages.console_out]
+# Output: Display enriched data
+[outputs.enriched_data_log]
 type = "console"
-inputs = ["filtered_data"]
+inputs = ["enriched_data"]
 ```
 
 3. **Run Liminal**:
@@ -100,21 +114,118 @@ cargo run
 
 4. **Send test data**:
 ```bash
-mosquitto_pub -h localhost -t sensors/temperature -m '{"temperature": 23.5}'
+# Send sample IMU data to see the rule processor in action
+mosquitto_pub -h localhost -t liminal/sensors/esp32-001/imu -m '{
+  "device_id": "esp32-001",
+  "sensor_type": "imu", 
+  "accelerometer": {"x": 0.6, "y": 0.7, "z": 0.3},
+  "gyroscope": {"x": 3.5, "y": 0.7, "z": -0.6},
+  "temperature": 26.8
+}'
 ```
 
-## Configuration
+You should see enriched output with computed `acceleration_magnitude` and added metadata fields.
+
+## Example Configurations
+
+The `config/examples/` directory contains several working examples:
+
+- `config_rule_test.toml` - Basic rule processing with device metadata and sensor math
+- `config_led_control_with_else.toml` - LED control using else_actions for binary states
+- `config_advanced_rule.toml` - Complex filtering and transformation chains
+
+Run any example with:
+```bash
+cargo run -- --config config/examples/config_rule_test.toml
+```
+
+## Rule Processor Examples
+
+The rule processor is Liminal's most powerful built-in processor. It applies conditional logic to transform, filter, and route messages. Here are some patterns from the example configurations:
+
+### Conditional Field Manipulation
+
+```toml
+# From config/examples/config_rule_test.toml
+[[rules]]
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    # Compute a derived field using mathematical expressions
+    { type = "compute_field", field_path = "acceleration_magnitude", 
+      expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
+]
+else_actions = [
+    { type = "drop_message" }  # Drop non-IMU messages
+]
+```
+
+### Data Minimisation with Pre-computation
+
+```toml
+# From config/config.toml - compute magnitude, then keep only essential fields
+[[rules]]
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    # First: compute field using full original payload
+    { type = "compute_field", field_path = "acceleration_magnitude", 
+      expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" },
+    # Then: destructive reset to minimal payload
+    { type = "keep_only_fields", field_paths = ["device_id", "acceleration_magnitude"] }
+]
+```
+
+### Temperature-based Control Logic
+
+```toml
+# From config/config.toml - LED control based on temperature
+[[rules]]
+condition = { field_path = "temperature", operation = ">", value = 15.0 }
+actions = [
+    { type = "keep_only_fields", field_paths = [] },  # Clear everything
+    { type = "set_field", field_path = "state", value = true }
+]
+else_actions = [
+    { type = "keep_only_fields", field_paths = [] },
+    { type = "set_field", field_path = "state", value = false }
+]
+```
+
+### Available Rule Actions
+
+- `set_field`: Add or modify a field with a static value
+- `copy_field`: Copy a field to a new location  
+- `rename_field`: Rename an existing field
+- `remove_field`: Delete a field
+- `compute_field`: Calculate a new field using mathematical expressions
+- `keep_only_fields`: Reset message to contain only specified fields (destructive)
+- `pass_through`: Forward message unchanged
+- `drop_message`: Discard the message entirely
+
+### Condition Operations
+
+- `equals`, `not_equals`: Exact value matching
+- `startswith`, `endswith`, `contains`: String pattern matching
+- `>`, `>=`, `<`, `<=`: Numerical comparisons
+
+### Mathematical Expressions
+
+Computed fields support standard mathematical operations and functions:
+- Basic operators: `+`, `-`, `*`, `/`, `^` (power)
+- Functions: `sqrt()`, `sin()`, `cos()`, `tan()`, `abs()`, `ln()`, `log()`, `max()`, `min()`
+- Field references: Use dot notation like `accelerometer.x`, `sensor.temperature`
+
+## Configuration Structure
 
 Liminal uses TOML configuration files to define processing pipelines. The main configuration file is `config/config.toml`.
 
-### Configuration Structure
+### Basic Configuration Pattern
 
 ```toml
 # Input sources
 [inputs.input_name]
 type = "processor_type"
 output = "channel_name"
-concurrency = { type = "thread" }  # or "async"
+concurrency = { type = "thread" }  
 channel = { type = "broadcast", capacity = 256 }
 
 [inputs.input_name.parameters]
@@ -262,12 +373,6 @@ Set logging level to debug for detailed output:
 ```rust
 logging::init_logging("debug");
 ```
-
-## Examples
-
-See the `config/examples/` directory for complete configuration examples:
-
-- `config_mqtt_sim.toml`: MQTT input with simulated data processing
 
 ## Contributing
 

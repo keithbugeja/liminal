@@ -18,7 +18,7 @@
 //! 
 //! // Create a built-in processor
 //! let config = StageConfig { /* ... */ };
-//! let processor = create_processor("scale", config)?;
+//! let processor = create_processor("rule", config)?;
 //! 
 //! // Register and create a custom processor
 //! register_processor("custom", Box::new(MyProcessor::new));
@@ -67,14 +67,13 @@ use crate::processors::{
         SimulatedSignalProcessor,
     },
     transform::{
-        RenameProcessor, 
-        ScaleProcessor, 
-        LowPassProcessor
+        RuleProcessor
     },
     aggregator::{
         FusionStage,
     },
     output::{
+        MqttOutputProcessor,
         ConsoleOutputProcessor, 
         FileOutputProcessor,
     },
@@ -133,7 +132,6 @@ fn get_processor_registry() -> &'static Mutex<HashMap<String, ProcessorConstruct
 /// ```rust
 /// let processors = list_processors();
 /// println!("Available processors: {:?}", processors);
-/// // Output: ["simulated", "scale", "lowpass", "fusion", "log"]
 /// ```
 pub fn list_processors() -> Vec<String> {
     ensure_default_processors();
@@ -205,10 +203,12 @@ pub fn register_processor(name: &str, constructor: ProcessorConstructor) {
 /// 
 /// # Registered Processors
 /// - `"simulated"` - Generates simulated signal data
-/// - `"lowpass"` - Filters values below a threshold  
-/// - `"scale"` - Multiplies field values by a scale factor
+/// - `"rule"` - Applies conditional transformations and filtering
 /// - `"fusion"` - Combines data from multiple inputs
-/// - `"log"` - Outputs received messages to console/file
+/// - `"console"` - Outputs received messages to console
+/// - `"file"` - Outputs received messages to file
+/// - `"mqtt_sub"` - Subscribes to MQTT topics for input
+/// - `"mqtt_pub"` - Publishes messages to MQTT topics
 /// 
 /// # Thread Safety
 /// This function is thread-safe and idempotent - calling it multiple times
@@ -217,10 +217,9 @@ fn ensure_default_processors() {
     static INITIALIZED: OnceLock<()> = OnceLock::new();
     INITIALIZED.get_or_init(|| {
         register_processor("mqtt_sub", Box::new(MqttInputProcessor::new));
+        register_processor("mqtt_pub", Box::new(MqttOutputProcessor::new));
         register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
-        register_processor("rename", Box::new(RenameProcessor::new));
-        register_processor("lowpass", Box::new(LowPassProcessor::new));
-        register_processor("scale", Box::new(ScaleProcessor::new));
+        register_processor("rule", Box::new(RuleProcessor::new));
         register_processor("fusion", Box::new(FusionStage::new));
         register_processor("console", Box::new(ConsoleOutputProcessor::new));
         register_processor("file", Box::new(FileOutputProcessor::new));

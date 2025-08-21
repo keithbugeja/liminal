@@ -1,0 +1,62 @@
+# Advanced Rule-based Processing
+# Demonstrates filtering + transformation in one step
+# - Filter: Only process IMU sensor data with temperature > 25°C  
+# - Transform: Add computed fields, clean up unnecessary data
+
+# Input: Subscribe to sensor data
+[inputs.mqtt_sensors]
+type = "mqtt_sub"
+output = "all_sensor_data"
+channel = { type = "broadcast", capacity = 1000 }
+parameters = { broker_url = "mqtt://localhost:1883", client_id = "liminal_advanced_rule", clean_session = true, topics = ["liminal/sensors/+/+"]}
+
+# Pipeline for advanced rule processing
+[pipelines.advanced_processing]
+description = "Filter and transform in one step using rules"
+
+# Advanced rule: filter by sensor type AND temperature, then transform
+[pipelines.advanced_processing.stages.filter_and_transform]
+type = "rule"
+inputs = ["all_sensor_data"]
+output = "processed_data"
+channel = { type = "broadcast", capacity = 500 }
+
+[[pipelines.advanced_processing.stages.filter_and_transform.parameters.rules]]
+# First rule: Process IMU sensors with high temperature
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    # Compute acceleration magnitude
+    { type = "compute_field", field_path = "acceleration_magnitude", expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" },
+    # Add temperature status
+    { type = "set_field", field_path = "temperature_status", value = "normal" },
+    # Clean up - remove gyroscope data to reduce payload size
+    { type = "remove_field", field_path = "gyroscope" },
+    { type = "remove_field", field_path = "imu_type" }
+]
+# For non-IMU sensors, drop the message
+else_actions = [
+    { type = "drop_message" }
+]
+
+[[pipelines.advanced_processing.stages.filter_and_transform.parameters.rules]]
+# Second rule: Check temperature and enhance/filter accordingly
+condition = { field_path = "temperature", operation = ">=", value = 28.0 }
+actions = [
+    # High temperature - mark as hot and keep
+    { type = "set_field", field_path = "temperature_status", value = "hot" },
+    { type = "compute_field", field_path = "temp_celsius", expression = "temperature" }
+]
+else_actions = [
+    # Low temperature - drop the message entirely
+    { type = "drop_message" }
+]
+
+# Output: Console log for processed messages
+[outputs.processed_log]
+type = "console"
+inputs = ["processed_data"]
+
+# Output: Console log for all input messages (for comparison)
+# [outputs.all_data_log]
+# type = "console"
+# inputs = ["all_sensor_data"]

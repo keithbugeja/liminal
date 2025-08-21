@@ -1,26 +1,20 @@
-# NOTE: Liminal uses config/config.toml as the main configuration file.
-# Until I get around to integrating clap for command line arguments,
-# I will be putting working configuration examples under the config/examples directory.
-# This allows me to keep the main config file clean and focused on the core configuration.
+# Rule-based Data Transformation
+# Demonstrates how to use Liminal's rule processor with two pipelines:
+# - Compute acceleration magnitude from IMU data, publish as `magnitude_data`, and sink to console
+# - Send MQTT messages to toggle an LED on or off based on simulated temperature readings
 
-# Inputs: Simulated data sources
-# [inputs.random_temp]
-# type = "simulated"
-# output = "raw_temp_data"
-# concurrency = { type = "thread" }
-# channel = { type = "broadcast", capacity = 256 }
-# parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 10000 }
+# Input: Simulated data source
+[inputs.random_temp]
+type = "simulated"
+output = "raw_temp_data"
+concurrency = { type = "thread" }
+channel = { type = "broadcast", capacity = 256 }
+parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 5000 }
 
-# [inputs.random_humidity]
-# type = "simulated"
-# output = "raw_humidity_data"
-# concurrency = { type = "thread" }
-# channel = { type = "broadcast", capacity = 256 }
-# parameters = { field_out = "humidity", distribution = "normal", min_value = 15.0, max_value = 60.0, interval_ms = 10000 }
-
-[inputs.mqtt_acceleration]
+# Input: MQTT IMU data source
+[inputs.mqtt_imu]
 type = "mqtt_sub"
-output = "raw_acceleration_data"
+output = "raw_imu_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
 # Uncomment the following line to read synthetic acceleration data from MQTT (message_gen.sh)
@@ -30,68 +24,58 @@ channel = { type = "broadcast", capacity = 256 }
 parameters = { broker_url = "mqtt://localhost:1883", topics = ["liminal/sensors/esp32-001/imu"], client_id = "liminal_mqtt_sensor_input", qos = 0, clean_session = true, username = "", password = "" }
 
 #
-# Pipelines: MQTT data processing (uncomment to enable synthetic acceleration data processing)
+# Pipelines
 #
-# [pipelines.mqtt_pipeline]
-# description = "Processes MQTT acceleration data"
 
-# [pipelines.mqtt_pipeline.stages.rename_acceleration]
-# type = "rename"
-# inputs = ["raw_acceleration_data"]
-# output = "acceleration_data"
-# parameters = { fields_in = ["accel"], fields_out = ["acceleration"] }
+# [1] Pipelines: MQTT data processing
+[pipelines.mqtt_pipeline]
+description = "Processes MQTT acceleration data"
 
-# [pipelines.mqtt_pipeline.stages.lowpass_acceleration]
-# type = "lowpass"
-# inputs = ["raw_acceleration_data"]
-# output = "filtered_acceleration"
-# parameters = { field_in = "acceleration", field_out = "filtered_acceleration", threshold = 100 }
+[pipelines.mqtt_pipeline.stages.compute_magnitude]
+type = "rule"
+inputs = ["raw_imu_data"]
+output = "accelerator_magnitude_data"
 
-#
-# Pipelines: Simulated data processing (uncomment to enable simulated temperatureprocessing)
-#
-# [pipelines.simulated_pipeline]
-# description = "Processes simulated temperature data"
+[[pipelines.mqtt_pipeline.stages.compute_magnitude.parameters.rules]]
+# Compute acceleration magnitude from IMU data
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    { type = "keep_only_fields", field_paths = ["device_id"] },
+    { type = "compute_field", field_path = "acceleration_magnitude", expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
+]
+else_actions = [
+    { type = "drop_message" }
+]
 
-# [pipelines.simulated_pipeline.stages.scale_temp]
-# type = "scale"
-# inputs = ["raw_temp_data"]
-# output = "temperature_fahrenheit"
-# parameters = { field_in = "temperature", field_out = "temperature_fahrenheit", scale_factor = 1.5 }
+# [2] Pipelines: Temperature led pipeline
+[pipelines.temperature_led_pipeline]
+description = "Processes temperature data and controls LED based on thresholds"
 
-# [pipelines.simulated_pipeline.stages.lowpass_temp]
-# type = "lowpass"
-# inputs = ["temperature_fahrenheit"]
-# output = "filtered_temperature"
-# parameters = { field_in = "temperature_fahrenheit", field_out = "filtered_temperature", threshold = 50 }
+[pipelines.temperature_led_pipeline.stages.temperature_processor]
+type = "rule"
+inputs = ["raw_temp_data"]
+output = "led_commands"
 
-#
-# Pipelines: Simulated data processing (uncomment to enable simulated humidity processing)
-#
-# [pipelines.simulated_pipeline_humidity]
-# description = "Processes simulated humidity data"
+[[pipelines.temperature_led_pipeline.stages.temperature_processor.parameters.rules]]
+condition = { field_path = "temperature", operation = ">", value = 15.0 }
+actions = [
+    { type = "keep_only_fields", field_paths = [] },
+    { type = "set_field", field_path = "state", value = true },
+]
+else_actions = [
+    { type = "keep_only_fields", field_paths = [] },
+    { type = "set_field", field_path = "state", value = false },
+]
 
-# [pipelines.simulated_pipeline_humidity.stages.scale_humidity]
-# type = "scale"
-# inputs = ["raw_humidity_data"]
-# output = "scaled_humidity"
-# parameters = { field_in = "humidity", field_out = "scaled_humidity", scale_factor = 2.0 }
+# Output: Send LED commands via MQTT
+[outputs.led_output]
+type = "mqtt_pub"
+inputs = ["led_commands"]
+parameters = { broker_url = "mqtt://localhost:1883", client_id = "liminal_led_controller_else", clean_session = true, default_topic = "liminal/commands/esp32-001/devices/status_led" }
 
-# Outputs: External data sinks
+# Outputs: Console logs
 [outputs.log_output]
 type = "console"
 
-# Uncomment for data from simulated temperature and humidity sources
-# inputs = ["temperature_fahrenheit", "filtered_temperature", "scaled_humidity", "filtered_acceleration"]
-
-# Uncomment for data from MQTT/synthetic accelerometer
-# inputs = ["filtered_acceleration"]
-
 # Accelerator data output from MQTT/MPU6500
-inputs = ["raw_acceleration_data"]
-# parameters = { destination = "file://logs/simulated_output.log", format = "json" }
-
-# [outputs.json_logger]
-# type = "file"
-# inputs = ["scaled_temperature"]
-# parameters = { file_path = "./logs/output.json", format = "json", append = true, create_dirs = true }
+inputs = ["accelerator_magnitude_data"]

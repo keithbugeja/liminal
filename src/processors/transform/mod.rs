@@ -1,7 +1,3 @@
-pub mod lowpass;
-pub mod scale;
-pub mod rename;
+pub mod rule;
 
-pub use lowpass::LowPassProcessor;
-pub use scale::ScaleProcessor;
-pub use rename::RenameProcessor;
+pub use rule::RuleProcessor;

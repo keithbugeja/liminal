@@ -1,0 +1,63 @@
+# Test configuration for Rule Transformer
+# This config demonstrates rule-based transformations on ESP32 sensor data
+
+[inputs.mqtt_sensors]
+type = "mqtt_sub"
+output = "all_sensor_data"
+
+[inputs.mqtt_sensors.parameters]
+broker_url = "mqtt://localhost:1883"
+topics = ["liminal/sensors/+/+"]
+client_id = "liminal_rule_test"
+clean_session = true
+
+[inputs.mqtt_sensors.channel]
+type = "broadcast"
+capacity = 1000
+
+# Pipeline to test rule-based transformations
+[pipelines.rule_test]
+description = "Tests rule-based transformations on ESP32 sensor data"
+
+# Rule transformer to enrich ESP32 data
+[pipelines.rule_test.stages.rule_enricher]
+type = "rule"
+inputs = ["all_sensor_data"]
+output = "enriched_data"
+
+[[pipelines.rule_test.stages.rule_enricher.parameters.rules]]
+# Rule 1: Add device classification for ESP32 devices
+condition = { field_path = "device_id", operation = "startswith", value = "esp32-" }
+actions = [
+    { type = "set_field", field_path = "device_type", value = "esp32" },
+    { type = "set_field", field_path = "vendor", value = "espressif" },
+    { type = "copy_field", source_field = "device_id", target_field = "original_device_id" }
+]
+
+[[pipelines.rule_test.stages.rule_enricher.parameters.rules]]
+# Rule 2: Compute acceleration magnitude for IMU sensors
+condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
+actions = [
+    { type = "compute_field", field_path = "acceleration_magnitude", expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
+]
+
+[[pipelines.rule_test.stages.rule_enricher.parameters.rules]]
+# Rule 3: Add high temperature warning
+condition = { field_path = "temperature", operation = ">", value = 30.0 }
+actions = [
+    { type = "set_field", field_path = "high_temp_warning", value = true },
+    { type = "set_field", field_path = "temp_status", value = "warning" }
+]
+
+[pipelines.rule_test.stages.rule_enricher.channel]
+type = "broadcast"
+capacity = 500
+
+# Console outputs for testing
+[outputs.all_data_log]
+type = "console"
+inputs = ["all_sensor_data"]
+
+[outputs.enriched_data_log]
+type = "console"
+inputs = ["enriched_data"]

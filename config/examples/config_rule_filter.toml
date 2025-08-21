@@ -1,0 +1,43 @@
+# Rule-based Filter Configuration
+# Demonstrates how rules can replace filter processor functionality
+# - Pass through messages from ESP32 devices only
+# - Drop all other messages
+
+# Input: Subscribe to sensor data
+[inputs.mqtt_sensors]
+type = "mqtt_sub"
+output = "all_sensor_data"
+channel = { type = "broadcast", capacity = 1000 }
+parameters = { broker_url = "mqtt://localhost:1883", client_id = "liminal_rule_filter", clean_session = true, topics = ["liminal/sensors/+/+"]}
+
+# Pipeline for rule-based filtering
+[pipelines.rule_filter]
+description = "Filters messages using rule processor"
+
+# Rule-based filter: pass ESP32 messages, drop everything else
+[pipelines.rule_filter.stages.device_filter]
+type = "rule"
+inputs = ["all_sensor_data"]
+output = "filtered_data"
+channel = { type = "broadcast", capacity = 500 }
+
+[[pipelines.rule_filter.stages.device_filter.parameters.rules]]
+# If device_id starts with "esp32", pass through unchanged
+condition = { field_path = "device_id", operation = "startswith", value = "esp32" }
+actions = [
+    { type = "pass_through" }  # Keep all fields unchanged
+]
+# Otherwise, drop the message
+else_actions = [
+    { type = "drop_message" }
+]
+
+# Output: Console log for filtered messages
+[outputs.filtered_log]
+type = "console"
+inputs = ["filtered_data"]
+
+# Output: Console log for all input messages (for comparison)
+[outputs.all_data_log]
+type = "console" 
+inputs = ["all_sensor_data"]
