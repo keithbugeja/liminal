@@ -19,6 +19,18 @@ A high-performance, configurable data processing pipeline framework written in R
 - **Flexible Configuration**: Define pipelines declaratively using TOML configuration
 - **Extensible**: Easy-to-add custom processors for domain-specific needs
 
+## Architecture
+
+Liminal uses a message-passing architecture where:
+
+- **Messages** carry data with source, topic, payload, and timestamp
+- **Channels** provide communication between stages (broadcast/MPSC)
+- **Processors** transform data and forward to output channels
+- **Pipelines** compose processors into data processing workflows
+- **Configuration** defines the complete system declaratively
+
+This design enables high-throughput, low-latency processing with clear separation of concerns.
+
 ## Current Processors
 
 Liminal ships with these built-in processors:
@@ -385,18 +397,6 @@ logging::init_logging("debug");
 ## License
 
 This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Architecture
-
-Liminal uses a message-passing architecture where:
-
-- **Messages** carry data with source, topic, payload, and timestamp
-- **Channels** provide communication between stages (broadcast/MPSC)
-- **Processors** transform data and forward to output channels
-- **Pipelines** compose processors into data processing workflows
-- **Configuration** defines the complete system declaratively
-
-This design enables high-throughput, low-latency processing with clear separation of concerns.
 
 ## Related Projects
 
