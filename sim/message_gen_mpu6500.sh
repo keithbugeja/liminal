@@ -5,9 +5,15 @@
 # If no iterations specified, runs infinitely
 
 BROKER="localhost"
-TOPIC="sensors/mpu6500/accelerometer"
-DEVICE_ID="ESP32-MPU6500"
-SENSOR_TYPE="MPU6500"
+DEVICE_ID="esp32-001"
+SENSOR_TYPE="imu"
+IMU_TYPE="MPU6500"
+
+TOPIC_BASE="liminal"
+TOPIC_SENSORS="$TOPIC_BASE/sensors/$DEVICE_ID"
+# TOPIC_COMMANDS="$TOPIC_BASE/commands/$DEVICE_ID"
+# TOPIC_STATUS="$TOPIC_BASE/status/$DEVICE_ID"
+TOPIC="$TOPIC_SENSORS/$SENSOR_TYPE"
 
 # Parse command line arguments
 ITERATIONS=${1:-"infinite"}
@@ -37,22 +43,38 @@ generate_message() {
     # Generate realistic accelerometer values
     # X and Y: -2.0 to 2.0 g (typical for device movement)
     # Z: 8.5 to 10.5 g (gravity + small variations)
-    local x=$(random_float -2.0 2.0 3)
-    local y=$(random_float -2.0 2.0 3)
-    local z=$(random_float 8.5 10.5 3)
-    
+    local accel_x=$(random_float -2.0 2.0 3)
+    local accel_y=$(random_float -2.0 2.0 3)
+    local accel_z=$(random_float 8.5 10.5 3)
+
+    local gyro_x=$(random_float -2.0 2.0 3)
+    local gyro_y=$(random_float -2.0 2.0 3)
+    local gyro_z=$(random_float 8.5 10.5 3)
+
+    local temp_v=$(random_float 20.0 45.0 1) 
+
     # Create JSON message
     local message=$(cat <<EOF
 {
+  "sensor_name":"main_imu",
+  "sensor_type":"imu",
+  "imu_type":"$IMU_TYPE",
   "timestamp": $timestamp,
   "device_id": "$DEVICE_ID",
-  "sensor_type": "$SENSOR_TYPE",
   "accelerometer": {
-    "x": $x,
-    "y": $y,
-    "z": $z,
+    "x": $accel_x,
+    "y": $accel_y,
+    "z": $accel_z,
     "unit": "g"
-  }
+  },
+  "gyroscope": {
+    "x": $gyro_x,
+    "y": $gyro_y,
+    "z": $gyro_z,
+    "unit":"°/s"
+  },
+  "temperature": $temp_v,
+  "temperature_unit":"°C"  
 }
 EOF
 )

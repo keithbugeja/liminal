@@ -27,7 +27,7 @@ channel = { type = "broadcast", capacity = 256 }
 # parameters = { broker_url = "mqtt://localhost:1883", topics = ["test/acceleration"], client_id = "test_mqtt_input", qos = 0, clean_session = true, username = "", password = "" }
 
 # Reading MPU6500 accelerometer data from MQTT
-parameters = { broker_url = "mqtt://localhost:1883", topics = ["sensors/mpu6500/accelerometer"], client_id = "liminal_mqtt_sensor_input", qos = 0, clean_session = true, username = "", password = "" }
+parameters = { broker_url = "mqtt://localhost:1883", topics = ["liminal/sensors/esp32-001/imu"], client_id = "liminal_mqtt_sensor_input", qos = 0, clean_session = true, username = "", password = "" }
 
 #
 # Pipelines: MQTT data processing (uncomment to enable synthetic acceleration data processing)
