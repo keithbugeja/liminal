@@ -64,6 +64,7 @@ use crate::processors::{
     Processor,
     input::{
         MqttInputProcessor, 
+        TcpInputProcessor,
         SimulatedSignalProcessor,
     },
     transform::{
@@ -74,6 +75,7 @@ use crate::processors::{
     },
     output::{
         MqttOutputProcessor,
+        TcpOutputProcessor,
         ConsoleOutputProcessor, 
         FileOutputProcessor,
     },
@@ -218,6 +220,8 @@ fn ensure_default_processors() {
     INITIALIZED.get_or_init(|| {
         register_processor("mqtt_sub", Box::new(MqttInputProcessor::new));
         register_processor("mqtt_pub", Box::new(MqttOutputProcessor::new));
+        register_processor("tcp_input", Box::new(TcpInputProcessor::new));
+        register_processor("tcp_output", Box::new(TcpOutputProcessor::new));
         register_processor("simulated", Box::new(SimulatedSignalProcessor::new));
         register_processor("rule", Box::new(RuleProcessor::new));
         register_processor("fusion", Box::new(FusionStage::new));

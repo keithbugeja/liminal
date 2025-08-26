@@ -1,7 +1,12 @@
 use crate::processors::Processor;
 use crate::processors::common::MqttConnectionConfig;
-use crate::config::{extract_field_params, extract_param, StageConfig, FieldConfig};
-use crate::config::ProcessorConfig;
+use crate::config::{
+    extract_field_params, 
+    extract_param, 
+    ProcessorConfig,
+    StageConfig, 
+    FieldConfig
+};
 use crate::core::message::Message;
 use crate::core::context::ProcessingContext;
 use crate::core::time::now_millis;

@@ -79,3 +79,9 @@ type = "console"
 
 # Accelerator data output from MQTT/MPU6500
 inputs = ["accelerator_magnitude_data"]
+
+# Output: TCP JSON over packet
+[outputs.tcp_json_output]
+type = "tcp_output"
+inputs = ["accelerator_magnitude_data"]
+parameters = { host = "localhost", port = 9999, mode = "client", reconnect = true, reconnect_interval_ms = 5000 }
