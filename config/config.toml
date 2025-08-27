@@ -9,7 +9,22 @@ type = "simulated"
 output = "raw_temp_data"
 concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
-parameters = { field_out = "temperature", distribution = "normal", min_value = -10.0, max_value = 40.0, interval_ms = 5000 }
+
+# New timing configuration (sequencing, event-time, watermarks, etc.)
+[inputs.random_temp.timing]
+event_time_field = "timestamp"
+watermark_strategy = { type = "periodic", interval_ms = 1000 }
+max_lateness_ms = 5000
+processing_timeout_ms = 10000 
+jitter_bounds_ms = 100
+metrics_enabled = true
+
+[inputs.random_temp.parameters]
+field_out = "temperature"
+distribution = "normal"
+min_value = -10.0
+max_value = 40.0
+interval_ms = 5000
 
 # Input: MQTT IMU data source
 [inputs.mqtt_imu]
@@ -22,6 +37,14 @@ channel = { type = "broadcast", capacity = 256 }
 
 # Reading MPU6500 accelerometer data from MQTT
 parameters = { broker_url = "mqtt://localhost:1883", topics = ["liminal/sensors/esp32-001/imu"], client_id = "liminal_mqtt_sensor_input", qos = 0, clean_session = true, username = "", password = "" }
+
+# Input: TCP JSON over packet
+[inputs.tcp_json_input]
+type = "tcp_input"
+output = "raw_tcp_data"
+concurrency = { type = "thread" }
+channel = { type = "broadcast", capacity = 256 }
+parameters = { host = "127.0.0.1", port = 9999, mode = "server", reconnect = true, reconnect_interval_ms = 5000 }
 
 #
 # Pipelines
@@ -77,11 +100,11 @@ parameters = { broker_url = "mqtt://localhost:1883", client_id = "liminal_led_co
 [outputs.log_output]
 type = "console"
 
-# Accelerator data output from MQTT/MPU6500
-inputs = ["accelerator_magnitude_data"]
+# Accelerator data output from MQTT/MPU6500, plus TCP loopback data
+inputs = ["raw_temp_data", "accelerator_magnitude_data", "raw_tcp_data"]
 
-# # Output: TCP JSON over packet
-# [outputs.tcp_json_output]
-# type = "tcp_output"
-# inputs = ["accelerator_magnitude_data"]
-# parameters = { host = "localhost", port = 9999, mode = "client", reconnect = true, reconnect_interval_ms = 5000 }
+# Output: TCP JSON over packet
+[outputs.tcp_json_output]
+type = "tcp_output"
+inputs = ["accelerator_magnitude_data"]
+parameters = { host = "127.0.0.1", port = 9999, mode = "client", reconnect = true, reconnect_interval_ms = 5000 }

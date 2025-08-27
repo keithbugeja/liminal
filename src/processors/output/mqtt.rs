@@ -1,11 +1,11 @@
+use crate::config::ProcessorConfig;
+use crate::config::{StageConfig, extract_param};
+use crate::core::context::ProcessingContext;
 use crate::processors::Processor;
 use crate::processors::common::MqttConnectionConfig;
-use crate::config::{extract_param, StageConfig};
-use crate::config::ProcessorConfig;
-use crate::core::context::ProcessingContext;
 
 use async_trait::async_trait;
-use rumqttc::{AsyncClient};
+use rumqttc::AsyncClient;
 use serde_json::Value;
 use std::collections::HashMap;
 use tokio::select;
@@ -21,21 +21,15 @@ pub struct MqttOutputConfig {
 impl ProcessorConfig for MqttOutputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         let connection = MqttConnectionConfig::from_parameters(&config.parameters, "liminal_out");
-        
+
         // Extract topic mapping from config
-        let topic_map: HashMap<String, String> = extract_param(
-            &config.parameters, 
-            "topic_map", 
-            HashMap::new()
-        );
-        
+        let topic_map: HashMap<String, String> =
+            extract_param(&config.parameters, "topic_map", HashMap::new());
+
         // Optional default topic for unmapped inputs
-        let default_topic: Option<String> = extract_param(
-            &config.parameters, 
-            "default_topic", 
-            None
-        );
-        
+        let default_topic: Option<String> =
+            extract_param(&config.parameters, "default_topic", None);
+
         let retain = extract_param(&config.parameters, "retain", false);
 
         Ok(Self {
@@ -48,18 +42,23 @@ impl ProcessorConfig for MqttOutputConfig {
 
     fn validate(&self) -> anyhow::Result<()> {
         self.connection.validate()?;
-        
+
         if self.topic_map.is_empty() && self.default_topic.is_none() {
-            return Err(anyhow::anyhow!("Must specify either topic_map or default_topic"));
+            return Err(anyhow::anyhow!(
+                "Must specify either topic_map or default_topic"
+            ));
         }
-        
+
         // Validate all topics are non-empty
         for (input, topic) in &self.topic_map {
             if topic.is_empty() {
-                return Err(anyhow::anyhow!("Topic for input '{}' cannot be empty", input));
+                return Err(anyhow::anyhow!(
+                    "Topic for input '{}' cannot be empty",
+                    input
+                ));
             }
         }
-        
+
         Ok(())
     }
 }
@@ -84,7 +83,9 @@ impl MqttOutputProcessor {
 
     fn resolve_topic(&self, channel_name: &str) -> Option<&str> {
         // First try the topic map, then fall back to default
-        self.config.topic_map.get(channel_name)
+        self.config
+            .topic_map
+            .get(channel_name)
             .map(|s| s.as_str())
             .or_else(|| self.config.default_topic.as_deref())
     }
@@ -103,7 +104,7 @@ impl Processor for MqttOutputProcessor {
 
         // Create client and event loop
         let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
-        
+
         // Spawn the event loop in a background task to handle MQTT connection
         tokio::spawn(async move {
             loop {
@@ -119,16 +120,16 @@ impl Processor for MqttOutputProcessor {
                 }
             }
         });
-        
+
         self.client = Some(client);
 
         tracing::info!(
             "MQTT publisher '{}' initialised (broker: {}, topic_map: {:?}, default: {:?}, QoS: {}, retain: {})",
-            self.name, 
-            self.config.connection.broker_url, 
+            self.name,
+            self.config.connection.broker_url,
             self.config.topic_map,
             self.config.default_topic,
-            self.config.connection.qos, 
+            self.config.connection.qos,
             self.config.retain
         );
         Ok(())
@@ -147,18 +148,18 @@ impl Processor for MqttOutputProcessor {
                             if let Some(topic) = self.resolve_topic(channel_name) {
                                 // Format payload as JSON string
                                 let payload_str = self.format_payload(&message.payload)?;
-                                
+
                                 // Publish to MQTT broker
                                 if let Err(e) = client.publish(
-                                    topic, 
-                                    self.config.connection.qos(), 
-                                    self.config.retain, 
+                                    topic,
+                                    self.config.connection.qos(),
+                                    self.config.retain,
                                     payload_str.as_bytes()
                                 ).await {
                                     tracing::error!("Failed to publish to MQTT topic '{}': {:?}", topic, e);
                                 } else {
                                     tracing::debug!(
-                                        "Published message from '{}' to MQTT topic: {} (payload: {})", 
+                                        "Published message from '{}' to MQTT topic: {} (payload: {})",
                                         channel_name, topic, payload_str
                                     );
                                     messages_published += 1;

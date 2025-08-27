@@ -1,0 +1,75 @@
+# Enhanced Liminal Configuration with Timing Semantics
+# This demonstrates the new timing features
+
+[inputs.sensor_data]
+type = "simulated"
+output = "raw_data"
+
+# Timing configuration for the input stage
+[inputs.sensor_data.timing]
+# Extract event time from the "timestamp" field in the payload
+event_time_field = "timestamp"
+
+# Generate watermarks every 1 second
+watermark_strategy = { type = "periodic", interval_ms = 1000 }
+
+# Allow up to 5 seconds of lateness
+max_lateness_ms = 5000
+
+# Set processing timeout to 10 seconds
+processing_timeout_ms = 10000
+
+# Allow up to 100ms jitter for real-time processing
+jitter_bounds_ms = 100
+
+# Enable timing metrics
+metrics_enabled = true
+
+[inputs.sensor_data.parameters]
+field_out = "value"
+interval_ms = 500
+distribution = "normal"
+min_value = 0.0
+max_value = 100.0
+
+[pipelines.data_processing]
+description = "Process sensor data with timing semantics"
+
+[pipelines.data_processing.stages.filter]
+type = "rule"
+inputs = ["raw_data"]
+output = "filtered_data"
+
+# Timing configuration for the transform stage
+[pipelines.data_processing.stages.filter.timing]
+# Use punctuated watermarks based on a control field
+watermark_strategy = { type = "punctuated", field = "control_timestamp" }
+max_lateness_ms = 2000
+metrics_enabled = true
+
+[pipelines.data_processing.stages.filter.parameters]
+[[pipelines.data_processing.stages.filter.parameters.rules]]
+condition = { field_path = "value", operation = "gt", value = 50.0 }
+actions = [
+    { type = "set_field", field_path = "status", value = "high" },
+    { type = "pass_through" }
+]
+else_actions = [
+    { type = "set_field", field_path = "status", value = "normal" },
+    { type = "pass_through" }
+]
+
+[outputs.console]
+type = "log"
+inputs = ["filtered_data"]
+
+# Timing configuration for output stage
+[outputs.console.timing]
+# Heuristic watermarks using 95th percentile
+watermark_strategy = { type = "heuristic", percentile = 95.0 }
+max_lateness_ms = 1000
+processing_timeout_ms = 5000
+metrics_enabled = true
+
+[outputs.console.parameters]
+format = "pretty"

@@ -1,20 +1,19 @@
 //! File Output Processor
-//! 
+//!
 //! Writes messages to files with configurable formatting and rotation options.
 //! Supports JSON, CSV, and plain text output formats with automatic file
 //! creation and directory handling.
 
-use crate::processors::Processor;
-use crate::config::{StageConfig, ProcessorConfig};
 use crate::config::params::extract_param;
+use crate::config::{ProcessorConfig, StageConfig};
 use crate::core::context::ProcessingContext;
+use crate::processors::Processor;
 
 use async_trait::async_trait;
 use serde::Deserialize;
 use std::path::PathBuf;
 use tokio::fs::{File, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
-
 
 /// Output format for file writing.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
@@ -56,18 +55,20 @@ pub struct FileOutputConfig {
 impl ProcessorConfig for FileOutputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         // Extract file path (required)
-        let file_path = extract_param(&config.parameters, "file_path", None::<String>)
-            .ok_or_else(|| anyhow::anyhow!("file_path parameter is required for file output processor"))?;
-        
+        let file_path =
+            extract_param(&config.parameters, "file_path", None::<String>).ok_or_else(|| {
+                anyhow::anyhow!("file_path parameter is required for file output processor")
+            })?;
+
         let file_path = PathBuf::from(file_path);
-        
+
         // Extract optional parameters with sensible defaults
         let format = extract_param(&config.parameters, "format", OutputFormat::Json);
         let append = extract_param(&config.parameters, "append", true);
         let create_dirs = extract_param(&config.parameters, "create_dirs", true);
         let buffer_size = extract_param(&config.parameters, "buffer_size", 8192_usize);
         let auto_flush = extract_param(&config.parameters, "auto_flush", false);
-        
+
         let config = Self {
             file_path,
             format,
@@ -76,17 +77,17 @@ impl ProcessorConfig for FileOutputConfig {
             buffer_size,
             auto_flush,
         };
-        
+
         config.validate()?;
         Ok(config)
     }
-    
+
     fn validate(&self) -> anyhow::Result<()> {
         // Validate file path
         if self.file_path.to_string_lossy().is_empty() {
             return Err(anyhow::anyhow!("file_path cannot be empty"));
         }
-        
+
         // Validate parent directory if create_dirs is false
         if !self.create_dirs {
             if let Some(parent) = self.file_path.parent() {
@@ -98,27 +99,27 @@ impl ProcessorConfig for FileOutputConfig {
                 }
             }
         }
-        
+
         Ok(())
     }
 }
 
 /// File output processor that writes messages to files.
-/// 
+///
 /// Supports multiple output formats and provides robust file handling
 /// with configurable buffering and directory creation.
-/// 
+///
 /// # Configuration Parameters
-/// 
+///
 /// - `file_path` (required): Path to the output file
 /// - `format`: Output format ("json", "csv", "text", "pretty")
 /// - `append`: Whether to append to existing file (default: true)
 /// - `create_dirs`: Whether to create parent directories (default: true)
 /// - `buffer_size`: Write buffer size in bytes (default: 8192)
 /// - `auto_flush`: Whether to flush after each message (default: false)
-/// 
+///
 /// # Example Configuration
-/// 
+///
 /// ```toml
 /// [outputs.file_logger]
 /// type = "file"
@@ -141,47 +142,45 @@ pub struct FileOutputProcessor {
 
 impl FileOutputProcessor {
     /// Creates a new file output processor.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `name` - The name of this processor instance
     /// * `config` - The stage configuration containing file output parameters
-    /// 
+    ///
     /// # Returns
-    /// 
+    ///
     /// A boxed processor instance ready for use in the pipeline.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if:
     /// - Required parameters are missing
     /// - File path is invalid
     /// - Parent directories don't exist and `create_dirs` is false
     pub fn new(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
-        let file_config = FileOutputConfig::from_stage_config(&config)?;
-        
+        let processor_config = FileOutputConfig::from_stage_config(&config)?;
+        processor_config.validate()?;
+
         Ok(Box::new(Self {
             name: name.to_string(),
-            config: file_config,
+            config: processor_config,
             writer: None,
             csv_headers_written: false,
         }))
     }
-    
+
     /// Opens the output file and creates the buffered writer.
     async fn open_file(&mut self) -> anyhow::Result<()> {
         // Create parent directories if needed
         if self.config.create_dirs {
             if let Some(parent) = self.config.file_path.parent() {
-                tokio::fs::create_dir_all(parent).await
-                    .map_err(|e| anyhow::anyhow!(
-                        "Failed to create directory '{}': {}",
-                        parent.display(),
-                        e
-                    ))?;
+                tokio::fs::create_dir_all(parent).await.map_err(|e| {
+                    anyhow::anyhow!("Failed to create directory '{}': {}", parent.display(), e)
+                })?;
             }
         }
-        
+
         // Open the file with appropriate options
         let file = OpenOptions::new()
             .create(true)
@@ -190,21 +189,23 @@ impl FileOutputProcessor {
             .truncate(!self.config.append)
             .open(&self.config.file_path)
             .await
-            .map_err(|e| anyhow::anyhow!(
-                "Failed to open file '{}': {}",
-                self.config.file_path.display(),
-                e
-            ))?;
-        
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to open file '{}': {}",
+                    self.config.file_path.display(),
+                    e
+                )
+            })?;
+
         // Create buffered writer
         let writer = if self.config.buffer_size > 0 {
             BufWriter::with_capacity(self.config.buffer_size, file)
         } else {
             BufWriter::new(file)
         };
-        
+
         self.writer = Some(writer);
-        
+
         tracing::info!(
             "File output processor '{}' opened file '{}' (format: {:?}, append: {})",
             self.name,
@@ -212,15 +213,21 @@ impl FileOutputProcessor {
             self.config.format,
             self.config.append
         );
-        
+
         Ok(())
     }
-    
+
     /// Writes a JSON payload to the file in the configured format.
-    async fn write_message(&mut self, channel_name: &str, payload: &serde_json::Value) -> anyhow::Result<()> {
-        let writer = self.writer.as_mut()
+    async fn write_message(
+        &mut self,
+        channel_name: &str,
+        payload: &serde_json::Value,
+    ) -> anyhow::Result<()> {
+        let writer = self
+            .writer
+            .as_mut()
             .ok_or_else(|| anyhow::anyhow!("File writer not initialised"))?;
-        
+
         match self.config.format {
             OutputFormat::Json => {
                 let json_line = serde_json::to_string(payload)
@@ -228,20 +235,23 @@ impl FileOutputProcessor {
                 writer.write_all(json_line.as_bytes()).await?;
                 writer.write_all(b"\n").await?;
             }
-            
+
             OutputFormat::Pretty => {
-                let json_pretty = serde_json::to_string_pretty(payload)
-                    .map_err(|e| anyhow::anyhow!("Failed to serialise payload to pretty JSON: {}", e))?;
+                let json_pretty = serde_json::to_string_pretty(payload).map_err(|e| {
+                    anyhow::anyhow!("Failed to serialise payload to pretty JSON: {}", e)
+                })?;
                 writer.write_all(json_pretty.as_bytes()).await?;
                 writer.write_all(b"\n").await?;
             }
-            
+
             OutputFormat::Csv => {
-                let payload_obj = payload.as_object()
+                let payload_obj = payload
+                    .as_object()
                     .ok_or_else(|| anyhow::anyhow!("CSV format requires JSON object payload"))?;
-                                  
+
                 // Write CSV data
-                let values: Vec<String> = payload_obj.values()
+                let values: Vec<String> = payload_obj
+                    .values()
                     .map(|v| match v {
                         serde_json::Value::String(s) => format!("\"{}\"", s.replace("\"", "\"\"")),
                         _ => v.to_string(),
@@ -251,19 +261,19 @@ impl FileOutputProcessor {
                 writer.write_all(csv_line.as_bytes()).await?;
                 writer.write_all(b"\n").await?;
             }
-            
+
             OutputFormat::Text => {
                 let text_line = format!("[{}] {}", channel_name, serde_json::to_string(payload)?);
                 writer.write_all(text_line.as_bytes()).await?;
                 writer.write_all(b"\n").await?;
             }
         }
-        
+
         // Auto-flush if configured
         if self.config.auto_flush {
             writer.flush().await?;
         }
-        
+
         Ok(())
     }
 }
@@ -275,42 +285,45 @@ impl Processor for FileOutputProcessor {
         tracing::info!("File output processor '{}' initialised", self.name);
         Ok(())
     }
-    
+
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
         // Skip processing if no inputs
         if context.inputs.is_empty() {
             return Ok(());
         }
-        
+
         let mut messages_written = 0;
-        
+
         // Process messages from all input channels
         for (channel_name, input) in context.inputs.iter_mut() {
             while let Some(message) = input.try_recv().await {
                 let payload = message.payload;
-                
-                self.write_message(channel_name, &payload).await
-                    .map_err(|e| anyhow::anyhow!(
-                        "Failed to write message from channel '{}': {}",
-                        channel_name,
-                        e
-                    ))?;
+
+                self.write_message(channel_name, &payload)
+                    .await
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "Failed to write message from channel '{}': {}",
+                            channel_name,
+                            e
+                        )
+                    })?;
                 messages_written += 1;
             }
         }
-        
+
         // Flush periodically even if auto_flush is disabled
         if messages_written > 0 && !self.config.auto_flush {
             if let Some(writer) = self.writer.as_mut() {
                 writer.flush().await?;
             }
         }
-        
+
         // Small delay to prevent busy-waiting when no messages
         if messages_written == 0 {
             tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
         }
-        
+
         Ok(())
     }
 }

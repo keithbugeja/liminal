@@ -1,44 +1,45 @@
+use crate::config::{
+    FieldConfig, ProcessorConfig, StageConfig, extract_field_params, extract_param,
+};
+use crate::core::context::ProcessingContext;
+use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
 use crate::processors::Processor;
 use crate::processors::common::MqttConnectionConfig;
-use crate::config::{
-    extract_field_params, 
-    extract_param, 
-    ProcessorConfig,
-    StageConfig, 
-    FieldConfig
-};
-use crate::core::message::Message;
-use crate::core::context::ProcessingContext;
-use crate::core::time::now_millis;
 
 use async_trait::async_trait;
 use rumqttc::{AsyncClient, Event, Packet};
 use serde_json::Value;
-use tokio::time::Duration;
 use tokio::sync::Mutex;
+use tokio::time::Duration;
 
-use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 
 #[derive(Debug, Clone)]
 pub struct MqttInputConfig {
     pub connection: MqttConnectionConfig,
     pub topics: Vec<String>,
-    pub field_config: FieldConfig,
+    pub field: FieldConfig,
+    pub timing: Option<crate::config::TimingConfig>,
 }
 
 impl ProcessorConfig for MqttInputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         let connection = MqttConnectionConfig::from_parameters(&config.parameters, "liminal");
-        let topics: Vec<String> = extract_param(&config.parameters, "topics", vec!["#".to_string()]);      
-        
-        // Field configuration will be removed. Any payload parameter renaming should be handled by 
+        let topics: Vec<String> =
+            extract_param(&config.parameters, "topics", vec!["#".to_string()]);
+
+        // |KB|Todo: Field configuration will be removed. Any payload parameter renaming should be handled by
         // a separate rename processor. Will be changing this to None in the future.
         let field_config = extract_field_params(&config.parameters);
+
+        // Extract timing configuration
+        let timing_config = config.timing.clone();
 
         Ok(Self {
             connection,
             topics,
-            field_config,
+            field: field_config,
+            timing: timing_config,
         })
     }
 
@@ -48,12 +49,13 @@ impl ProcessorConfig for MqttInputConfig {
             return Err(anyhow::anyhow!("At least one topic must be specified"));
         }
         Ok(())
-    }       
+    }
 }
 
 pub struct MqttInputProcessor {
     name: String,
     config: MqttInputConfig,
+    timing: TimingMixin,
     client: Option<AsyncClient>,
     event_loop: Option<Mutex<rumqttc::EventLoop>>,
 }
@@ -63,9 +65,13 @@ impl MqttInputProcessor {
         let processor_config = MqttInputConfig::from_stage_config(&config)?;
         processor_config.validate()?;
 
+        // Create timing mixin from processor configuration
+        let timing = TimingMixin::new(processor_config.timing.as_ref());
+
         Ok(Box::new(Self {
             name: name.to_string(),
             config: processor_config,
+            timing,
             client: None,
             event_loop: None,
         }))
@@ -77,31 +83,38 @@ impl Processor for MqttInputProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
         let mqttoptions = self.config.connection.create_mqtt_options("liminal")?;
         let (client, eventloop) = AsyncClient::new(mqttoptions, 10);
-                
+
         for topic in &self.config.topics {
             client
                 .subscribe(topic, self.config.connection.qos())
                 .await
                 .map_err(|e| anyhow::anyhow!("Failed to subscribe to topic '{}': {}", topic, e))?;
-            tracing::info!("Subscribed to MQTT topic: {} (QoS: {})", topic, self.config.connection.qos);
+            tracing::info!(
+                "Subscribed to MQTT topic: {} (QoS: {})",
+                topic,
+                self.config.connection.qos
+            );
         }
 
         self.client = Some(client);
         self.event_loop = Some(Mutex::new(eventloop));
 
-        tracing::info!("Field configuration: {:?}", self.config.field_config);
+        tracing::info!("Field configuration: {:?}", self.config.field);
+        tracing::info!(
+            "MQTT subscriber '{}' initialised with timing semantics",
+            self.name
+        );
 
-        tracing::info!("MQTT subscriber '{}' initialised", self.name);
-        Ok(())  
+        Ok(())
     }
 
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
         if let Some(ref event_loop_mutex) = self.event_loop {
-            // Changing logic to poll under the lock but then drop it before
+            // |KB| Changing logic to poll under the lock but then drop it before
             // any downstram awaits, to avoid convoying stages.
             let (maybe_topic, maybe_payload_bytes) = {
                 let mut eventloop = event_loop_mutex.lock().await;
-            
+
                 tokio::select! {
                     event_result = eventloop.poll() => {
                         match event_result {
@@ -126,30 +139,43 @@ impl Processor for MqttInputProcessor {
                     Err(_) => match std::str::from_utf8(&payload_bytes) {
                         Ok(s) => Value::String(s.to_owned()),
                         Err(_) => Value::String(BASE64.encode(&payload_bytes)),
-                    }
+                    },
                 };
-
-                let now = now_millis();
 
                 tracing::debug!("MQTT '{}' payload: {},", topic, payload);
 
                 if let Some(output_info) = &context.output {
-                    let message = Message {
-                        source: self.name.clone(),
-                        topic: output_info.name.clone(),
-                        payload,
-                        timestamp: now,
-                    };
+                    // Generate sequence ID and create message with timing semantics
+                    let sequence_id = self.timing.next_sequence_id();
+                    let message = self
+                        .timing
+                        .create_message_with_event_time_extraction(
+                            &self.name,
+                            &output_info.name,
+                            payload,
+                            std::time::SystemTime::now(),
+                        )
+                        .with_sequence_id(sequence_id);
 
                     if let Err(e) = output_info.channel.publish(message).await {
                         tracing::warn!("Downstream publish failed: {:?}", e);
                     } else {
-                        tracing::info!("Received MQTT message from topic: {}", topic); // Might downcast to debug later
-                    }    
+                        tracing::info!("Received MQTT message from topic: '{}'", topic); // Might downcast to debug later
+                    }
                 }
             }
         }
 
         Ok(())
+    }
+}
+
+impl WithTimingMixin for MqttInputProcessor {
+    fn timing_mixin(&self) -> &TimingMixin {
+        &self.timing
+    }
+
+    fn timing_mixin_mut(&mut self) -> &mut TimingMixin {
+        &mut self.timing
     }
 }

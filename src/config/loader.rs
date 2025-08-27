@@ -261,6 +261,7 @@ pub fn default_config() -> Config {
         output: Some("raw_data".to_string()),
         concurrency: None,
         channel: None,
+        timing: None,
         parameters: Some({
             let mut params = HashMap::new();
             params.insert("field_out".to_string(), serde_json::json!("value"));
@@ -276,6 +277,7 @@ pub fn default_config() -> Config {
         output: Some("processed_data".to_string()),
         concurrency: None,
         channel: None,
+        timing: None,
         parameters: Some({
             let mut params = HashMap::new();
             params.insert("field_in".to_string(), serde_json::json!("value"));
@@ -292,6 +294,7 @@ pub fn default_config() -> Config {
         output: None,
         concurrency: None,
         channel: None,
+        timing: None,
         parameters: Some({
             let mut params = HashMap::new();
             params.insert("format".to_string(), serde_json::json!("pretty"));

@@ -1,6 +1,6 @@
-use crate::processors::Processor;
 use crate::config::StageConfig;
 use crate::core::context::ProcessingContext;
+use crate::processors::Processor;
 
 use async_trait::async_trait;
 
@@ -9,7 +9,7 @@ pub struct ConsoleOutputProcessor {
 }
 
 impl ConsoleOutputProcessor {
-    pub fn new(name: &str, _ : StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+    pub fn new(name: &str, _config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
         Ok(Box::new(Self {
             name: name.to_string(),
         }))
@@ -28,17 +28,22 @@ impl Processor for ConsoleOutputProcessor {
         if context.inputs.is_empty() {
             return Ok(());
         }
-        
+
         for (name, input) in context.inputs.iter_mut() {
             if let Some(message) = input.try_recv().await {
                 tracing::info!(
-                    "'{}' => {:?}",
-                    name, 
-                    message
+                    "'{}' => Message(source: {}, topic: {}, event_time: {:?}, ingestion_time: {:?}, sequence_id: {:?}, payload: {:?})",
+                    name,
+                    message.source,
+                    message.topic,
+                    message.timing.event_time,
+                    message.timing.ingestion_time,
+                    message.timing.sequence_id,
+                    message.payload
                 );
             }
         }
-        
+
         // Small delay to prevent busy-waiting
         tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
 

@@ -1,7 +1,8 @@
 pub mod channel;
+pub mod context;
 pub mod message;
 pub mod pipeline;
 pub mod registry;
 pub mod stage;
-pub mod context;
-pub mod time;
+pub mod timing;
+pub mod timing_mixin;

@@ -12,5 +12,5 @@ pub use traits::ProcessorConfig;
 
 pub use loader::{load_config};
 pub use params::{extract_param, extract_field_params};
-pub use types::{ Config, StageConfig };
+pub use types::{ Config, StageConfig, TimingConfig };
 pub use validation::validate_config;
