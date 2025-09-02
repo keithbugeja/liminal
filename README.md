@@ -3,24 +3,7 @@
 ```
     ██╗     ██╗███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
     ██║     ██║████╗ ████║██║████╗  ██║██╔══██╗██║     
-    ### Running Your First Pipeline
-
-1. **Run with the default configuration**:
-```bash
-cargo run -- --config config/config.toml
-```
-
-2. **See the output**: The default config demonstrates several features:
-   - Simulated temperature data with timing semantics
-   - Rule-based processing (LED control based on temperature thresholds)
-   - Multiple outputs: console logging, MQTT publishing, and TCP integration
-   - Processing of MQTT sensor data (if available)
-
-3. **Test TCP integration** (optional):
-```bash
-# In another terminal, send JSON data to the TCP input
-echo '{"test": "data", "value": 42}' | nc 127.0.0.1 9999
-```╔████╔██║██║██╔██╗ ██║███████║██║     
+    ██║     ██║██╔████╔██║██║██╔██╗ ██║███████║██║     
     ██║     ██║██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║     
     ███████╗██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗
     ╚══════╝╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝                     
@@ -144,6 +127,25 @@ Liminal ships with these built-in processors:
 git clone https://github.com/keithbugeja/liminal.git
 cd liminal
 cargo build --release
+```
+
+### Running Your First Pipeline
+
+1. **Run with the default configuration**:
+```bash
+cargo run -- --config config/config.toml
+```
+
+2. **See the output**: The default config demonstrates several features:
+   - Simulated temperature data with timing semantics
+   - Rule-based processing (LED control based on temperature thresholds)
+   - Multiple outputs: console logging, MQTT publishing, and TCP integration
+   - Processing of MQTT sensor data (if available)
+
+3. **Test TCP integration** (optional):
+```bash
+# In another terminal, send JSON data to the TCP input
+echo '{"test": "data", "value": 42}' | nc 127.0.0.1 9999
 ```
 
 The default configuration in `config/config.toml` demonstrates:
