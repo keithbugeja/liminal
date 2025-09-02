@@ -19,101 +19,6 @@ A high-performance, configurable data processing pipeline framework written in R
 - **Multiple channel types**: Choose communication patterns (broadcast, direct, shared, fanout) with configurable backpressure
 - **Cross-language integration**: TCP protocol with length-prefixed JSON for connecting external systems
 
-## Architecture
-
-Liminal uses a message-passing architecture where:
-
-- **Messages** carry data with source, topic, payload, and comprehensive timing metadata (event time, ingestion time, sequence IDs, watermarks)
-- **Channels** provide communication between stages with four types: broadcast, direct (point-to-point), shared (MPMC), and fanout
-- **Processors** transform data and forward to output channels using configurable concurrency
-- **Pipelines** compose processors into data processing workflows
-- **Configuration** defines the complete system declaratively with timing constraints
-
-This design enables high-throughput, low-latency processing with clear separation of concerns.
-
-## Timing Semantics
-
-Liminal provides comprehensive timing semantics for real-time stream processing:
-
-- **Event Time vs Ingestion Time**: Messages track both when events occurred and when they were received
-- **Watermarks**: Automatic watermark generation for handling out-of-order data with three strategies:
-  - **Periodic**: Generate watermarks at fixed intervals
-  - **Punctuated**: Extract watermarks from special fields in the data stream
-  - **Heuristic**: Generate watermarks based on event distribution percentiles
-- **Processing Deadlines**: Configurable timeouts for real-time guarantees
-- **Sequence Tracking**: Automatic sequence ID assignment for message ordering
-- **Jitter Bounds**: Configurable timing constraints for latency-sensitive applications
-
-Configure timing on input sources and transform stages (outputs just sink data):
-
-```toml
-[inputs.sensor_data.timing]
-event_time_field = "timestamp"          # Extract event time from payload
-watermark_strategy = { type = "periodic", interval_ms = 1000 }
-max_lateness_ms = 5000                   # Drop messages older than 5s
-processing_timeout_ms = 10000            # Processing deadline
-jitter_bounds_ms = 100                   # Acceptable timing variation
-metrics_enabled = true                   # Collect timing metrics
-```
-
-## Channel Types
-
-Liminal supports four communication patterns between processing stages:
-
-- **Broadcast** (default): Fast fan-out messaging where slow consumers may miss messages. Best for real-time data streams where latest data is most important.
-- **Direct**: Point-to-point MPSC channel with backpressure. Single producer, single consumer with reliable delivery.
-- **Shared**: Multi-consumer MPMC channel with backpressure. Multiple consumers share the message load - each message goes to exactly one consumer.
-- **Fanout**: Fan-out using multiple MPSC channels with backpressure. Each consumer gets a copy of every message with reliable delivery.
-
-```toml
-[inputs.sensor_data]
-type = "simulated"
-output = "raw_data"
-channel = { type = "broadcast", capacity = 256 }  # or "direct", "shared", "fanout"
-```
-
-## TCP Protocol
-
-Liminal's TCP processors use a length-prefixed JSON protocol for cross-language integration:
-
-```
-[4-byte big-endian length][JSON payload]
-```
-
-This format is compatible with Erlang's `{packet, 4}` option, making it easy to integrate with OTP systems. Both TCP input and output processors support client and server modes:
-
-```toml
-# TCP Input (server mode - listens for connections)
-[inputs.tcp_data]
-type = "tcp_input"
-output = "external_data"
-parameters = { host = "127.0.0.1", port = 9999, mode = "server" }
-
-# TCP Output (client mode - connects to external system)
-[outputs.tcp_sink]
-type = "tcp_output"
-inputs = ["processed_data"]
-parameters = { host = "127.0.0.1", port = 8888, mode = "client" }
-```
-
-## Current Processors
-
-Liminal ships with these built-in processors:
-
-### Input Processors
-- **MQTT Subscriber** (`mqtt_sub`): Subscribe to MQTT topics and convert messages to internal format
-- **TCP Input** (`tcp_input`): Receive JSON messages over TCP with length-prefixed protocol
-- **Simulated Data Generator** (`simulated`): Generate synthetic data for testing and development
-
-### Transform Processors  
-- **Rule Processor** (`rule`): Apply conditional transformations with mathematical expressions, field manipulation, and routing logic
-
-### Output Processors
-- **Console Logger** (`console`): Display processed messages to stdout
-- **File Logger** (`file`): Write processed messages to files with configurable formats
-- **MQTT Publisher** (`mqtt_pub`): Publish messages to MQTT topics
-- **TCP Output** (`tcp_output`): Send JSON messages over TCP with length-prefixed protocol
-
 ## Quick Start
 
 ### Prerequisites
@@ -148,112 +53,45 @@ cargo run -- --config config/config.toml
 echo '{"test": "data", "value": 42}' | nc 127.0.0.1 9999
 ```
 
-The default configuration in `config/config.toml` demonstrates:
-- Simulated temperature data generation with timing semantics
-- MQTT sensor data processing (if broker available)
-- TCP input/output for external system integration
-- Rule-based processing with mathematical expressions
-- Multiple output destinations
-
 For MQTT examples, you can optionally start a broker:
 ```bash
 # Using Docker
 docker run -it -p 1883:1883 eclipse-mosquitto
 ```
 
-## Example Configurations
+## Architecture
 
-The `config/examples/` directory contains several working examples:
+Liminal uses a message-passing architecture where:
 
-- `config_rule_test.toml` - Basic rule processing with device metadata and sensor math
-- `config_led_control_with_else.toml` - LED control using else_actions for binary states
-- `config_advanced_rule.toml` - Complex filtering and transformation chains
+- **Messages** carry data with source, topic, payload, and comprehensive timing metadata (event time, ingestion time, sequence IDs, watermarks)
+- **Channels** provide communication between stages with four types: broadcast, direct (point-to-point), shared (MPMC), and fanout
+- **Processors** transform data and forward to output channels using configurable concurrency
+- **Pipelines** compose processors into data processing workflows
+- **Configuration** defines the complete system declaratively with timing constraints
 
-Run any example with:
-```bash
-cargo run -- --config config/examples/config_rule_test.toml
-```
+### Built-in Processors
 
-## Rule Processor Examples
+**Input Processors:**
+- **`simulated`**: Generate test data (normal, uniform distributions)
+- **`mqtt_sub`**: Subscribe to MQTT topics
+- **`tcp_input`**: Receive JSON over TCP with length-prefixed protocol (compatible with Erlang `{packet, 4}`)
 
-The rule processor is Liminal's most powerful built-in processor. It applies conditional logic to transform, filter, and route messages. Here are some patterns from the example configurations:
+**Transform Processors:**
+- **`rule`**: Conditional logic and field transformations with mathematical expressions
 
-### Conditional Field Manipulation
+**Output Processors:**
+- **`console`**: Display messages to stdout
+- **`file`**: Write messages to files with configurable formats
+- **`mqtt_pub`**: Publish messages to MQTT topics
+- **`tcp_output`**: Send JSON over TCP with length-prefixed protocol
 
-```toml
-# From config/examples/config_rule_test.toml
-[[rules]]
-condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
-actions = [
-    # Compute a derived field using mathematical expressions
-    { type = "compute_field", field_path = "acceleration_magnitude", 
-      expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
-]
-else_actions = [
-    { type = "drop_message" }  # Drop non-IMU messages
-]
-```
+This design enables high-throughput, low-latency processing with clear separation of concerns.
 
-### Data Minimisation with Pre-computation
-
-```toml
-# From config/config.toml - compute magnitude, then keep only essential fields
-[[rules]]
-condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
-actions = [
-    # First: compute field using full original payload
-    { type = "compute_field", field_path = "acceleration_magnitude", 
-      expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" },
-    # Then: destructive reset to minimal payload
-    { type = "keep_only_fields", field_paths = ["device_id", "acceleration_magnitude"] }
-]
-```
-
-### Temperature-based Control Logic
-
-```toml
-# From config/config.toml - LED control based on temperature
-[[rules]]
-condition = { field_path = "temperature", operation = ">", value = 15.0 }
-actions = [
-    { type = "keep_only_fields", field_paths = [] },  # Clear everything
-    { type = "set_field", field_path = "state", value = true }
-]
-else_actions = [
-    { type = "keep_only_fields", field_paths = [] },
-    { type = "set_field", field_path = "state", value = false }
-]
-```
-
-### Available Rule Actions
-
-- `set_field`: Add or modify a field with a static value
-- `copy_field`: Copy a field to a new location  
-- `rename_field`: Rename an existing field
-- `remove_field`: Delete a field
-- `compute_field`: Calculate a new field using mathematical expressions
-- `keep_only_fields`: Reset message to contain only specified fields (destructive)
-- `pass_through`: Forward message unchanged
-- `drop_message`: Discard the message entirely
-
-### Condition Operations
-
-- `equals`, `not_equals`: Exact value matching
-- `startswith`, `endswith`, `contains`: String pattern matching
-- `>`, `>=`, `<`, `<=`: Numerical comparisons
-
-### Mathematical Expressions
-
-Computed fields support standard mathematical operations and functions:
-- Basic operators: `+`, `-`, `*`, `/`, `^` (power)
-- Functions: `sqrt()`, `sin()`, `cos()`, `tan()`, `abs()`, `ln()`, `log()`, `max()`, `min()`
-- Field references: Use dot notation like `accelerometer.x`, `sensor.temperature`
-
-## Configuration Structure
+## Configuration
 
 Liminal uses TOML configuration files to define processing pipelines. The main configuration file is `config/config.toml`.
 
-### Basic Configuration Pattern
+### Basic Structure
 
 ```toml
 # Input sources
@@ -264,16 +102,7 @@ concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
 
 [inputs.input_name.parameters]
-# processor-specific config here
-
-# Optional timing configuration (inputs and transforms only)
-[inputs.input_name.timing]
-event_time_field = "timestamp"
-watermark_strategy = { type = "periodic", interval_ms = 1000 }
-max_lateness_ms = 5000
-processing_timeout_ms = 10000
-jitter_bounds_ms = 100
-metrics_enabled = true
+# processor-specific parameters
 
 # Processing pipelines
 [pipelines.pipeline_name]
@@ -287,7 +116,7 @@ concurrency = { type = "thread" }
 channel = { type = "broadcast", capacity = 256 }
 
 [pipelines.pipeline_name.stages.stage_name.parameters]
-# processor-specific config here
+# processor-specific parameters
 
 # Output sinks (no timing config - they just sink data)
 [outputs.output_name]
@@ -295,28 +124,20 @@ type = "processor_type"        # console, file, mqtt_pub, tcp_output
 inputs = ["input_channel"]
 
 [outputs.output_name.parameters]
-# processor-specific config here
+# processor-specific parameters
 ```
 
-### Field Configuration
+### Channel Types
 
-Most processors support field mapping for data transformation:
-
-```toml
-# Single field mapping
-[stage.parameters]
-field_in = "raw_temp"
-field_out = "temperature"
-
-# Multiple field mapping
-[stage.parameters]
-fields_in = ["temp", "humidity"]
-fields_out = ["temperature", "humidity_pct"]
-```
+Choose communication patterns between processing stages:
+- **`broadcast`** (default): Fast fan-out, slow consumers may miss messages
+- **`direct`**: Point-to-point with backpressure, single consumer
+- **`shared`**: Multi-consumer load balancing, each message to one consumer
+- **`fanout`**: Each consumer gets copy of every message with backpressure
 
 ### Rule Actions
 
-The rule processor supports these actions for data transformation:
+The rule processor supports conditional transformations:
 
 ```toml
 [[pipelines.stage_name.parameters.rules]]
@@ -335,138 +156,215 @@ else_actions = [
 ]
 ```
 
-Available actions:
-- **set_field**: Set a field to a constant value
-- **compute_field**: Calculate field using mathematical expressions
-- **copy_field**: Copy value from one field to another
-- **rename_field**: Rename a field
-- **remove_field**: Remove a field from the message
-- **keep_only_fields**: Keep only specified fields, remove all others
-- **pass_through**: Let the message pass unchanged
-- **drop_message**: Drop the message entirely
+Available actions: `set_field`, `compute_field`, `copy_field`, `rename_field`, `remove_field`, `keep_only_fields`, `pass_through`, `drop_message`
 
-## Adding Custom Processors
+## Advanced Features
 
-### 1. Create a New Processor
+### Timing Semantics
+
+Configure timing on input sources and transform stages for real-time processing:
+
+```toml
+[inputs.sensor_data.timing]
+event_time_field = "timestamp"          # Extract event time from payload
+watermark_strategy = { type = "periodic", interval_ms = 1000 }
+max_lateness_ms = 5000                   # Drop messages older than 5s
+processing_timeout_ms = 10000            # Processing deadline
+jitter_bounds_ms = 100                   # Acceptable timing variation
+metrics_enabled = true                   # Collect timing metrics
+```
+
+Features:
+- **Event Time vs Ingestion Time**: Track when events occurred vs when received
+- **Watermarks**: Handle out-of-order data (periodic, punctuated, heuristic strategies)
+- **Processing Deadlines**: Drop messages that exceed time bounds
+- **Sequence Tracking**: Automatic message ordering
+- **Jitter Control**: Manage timing variations for real-time guarantees
+
+## Examples
+
+The `config/examples/` directory contains working examples:
+
+- `config_rule_test.toml` - Basic rule processing with device metadata and sensor math
+- `config_led_control_with_else.toml` - LED control using else_actions for binary states
+- `config_advanced_rule.toml` - Complex filtering and transformation chains
+
+Run any example with:
+```bash
+cargo run -- --config config/examples/config_rule_test.toml
+```
+
+## Extending Liminal
+
+Liminal is designed to be extensible. You can add new processors by implementing the required traits and registering them with the factory.
+
+### Adding a Custom Processor
+
+1. **Create a processor config struct** implementing `ProcessorConfig`:
 
 ```rust
-use crate::processors::Processor;
-use crate::config::{ProcessorConfig, StageConfig};
-use crate::core::{ProcessingContext, Message};
-use async_trait::async_trait;
+use crate::config::{
+    FieldConfig, ProcessorConfig, StageConfig, 
+    extract_field_params, extract_param
+};
 
-#[derive(Debug, Clone)]
-pub struct MyProcessorConfig {
-    // Your configuration fields
+#[derive(Debug)]
+struct MyProcessorConfig {
+    scale_factor: f64,
+    field: FieldConfig,
+    timing: Option<crate::config::TimingConfig>,
 }
 
 impl ProcessorConfig for MyProcessorConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
-        // Parse configuration from TOML
-        Ok(Self { /* ... */ })
+        // Extract scalar parameters
+        let scale_factor = extract_param(&config.parameters, "scale_factor", 1.0);
+        
+        // Extract field configuration
+        let field_config = extract_field_params(&config.parameters);
+        
+        // Validate field config is appropriate for this processor
+        match &field_config {
+            FieldConfig::Single { .. } | FieldConfig::Multiple { .. } => {
+                // Scale processor supports these field patterns
+            },
+            _ => return Err(anyhow::anyhow!("Scale processor requires field mapping configuration")),
+        }
+        
+        // Extract timing configuration
+        let timing_config = config.timing.clone();
+        
+        let config = Self { 
+            scale_factor, 
+            field: field_config,
+            timing: timing_config,
+        };
+        config.validate()?;
+        Ok(config)
     }
-
+    
     fn validate(&self) -> anyhow::Result<()> {
-        // Validate configuration
+        if self.scale_factor <= 0.0 {
+            return Err(anyhow::anyhow!("scale_factor must be positive"));
+        }
+        self.field.validate()?;
         Ok(())
     }
 }
+```
+
+2. **Implement the Processor trait**:
+
+```rust
+use async_trait::async_trait;
+use crate::processors::Processor;
+use crate::core::context::ProcessingContext;
 
 pub struct MyProcessor {
-    name: String,
     config: MyProcessorConfig,
+    // Add TimingMixin if needed for timing semantics
+    timing: TimingMixin,
 }
 
 impl MyProcessor {
-    pub fn new(name: &str, config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
-        let processor_config = MyProcessorConfig::from_stage_config(&config)?;
-        processor_config.validate()?;
+    pub fn new(name: &str, stage_config: StageConfig) -> anyhow::Result<Box<dyn Processor>> {
+        let config = MyProcessorConfig::from_stage_config(&stage_config)?;
+        let timing = TimingMixin::new(stage_config.timing.as_ref());
         
-        Ok(Box::new(Self {
-            name: name.to_string(),
-            config: processor_config,
-        }))
+        Ok(Box::new(Self { config, timing }))
     }
 }
 
 #[async_trait]
 impl Processor for MyProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
-        tracing::info!("MyProcessor '{}' initialised", self.name);
+        tracing::info!("Initialising MyProcessor");
         Ok(())
     }
 
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
-        // Your processing logic here
+        // Process messages from input channels and send to output
+        // Use self.config for parameters
+        // Use self.timing for timing operations if needed
         Ok(())
     }
 }
 ```
 
-### 2. Register the Processor
-
-Add your processor to the factory in `src/processors/factory.rs`:
+3. **Register with the factory** in `src/processors/factory.rs`:
 
 ```rust
-fn ensure_default_processors() {
-    static INITIALIZED: OnceLock<()> = OnceLock::new();
-    INITIALIZED.get_or_init(|| {
-        // ... existing processors ...
-        register_processor("my_processor", Box::new(MyProcessor::new));
-    });
+register_processor("my_processor", Box::new(MyProcessor::new));
+```
+
+4. **Use in configuration**:
+
+```toml
+# Single field transformation
+[inputs.my_input]
+type = "my_processor"
+output = "processed_data"
+
+[inputs.my_input.parameters]
+scale_factor = 2.0
+field_in = "input_field"
+field_out = "output_field"
+
+# Multiple field transformations
+[inputs.my_input_multi]
+type = "my_processor"
+output = "processed_data"
+
+[inputs.my_input_multi.parameters]
+scale_factor = 2.0
+fields_in = ["temp", "humidity"]
+fields_out = ["scaled_temp", "scaled_humidity"]
+
+# Output-only (for input processors)
+[inputs.my_generator]
+type = "my_processor"
+output = "generated_data"
+
+[inputs.my_generator.parameters]
+scale_factor = 2.0
+field_out = "generated_value"
+```
+
+### Processors with Timing Semantics
+
+For processors that need timing features, implement `WithTimingMixin`:
+
+```rust
+use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
+
+impl WithTimingMixin for MyProcessor {
+    fn timing_mixin(&self) -> &TimingMixin {
+        &self.timing
+    }
+    
+    fn timing_mixin_mut(&mut self) -> &mut TimingMixin {
+        &mut self.timing
+    }
 }
 ```
 
-### 3. Add to Module
-
-Update the appropriate module file (`src/processors/input/mod.rs`, `src/processors/transform/mod.rs`, or `src/processors/output/mod.rs`):
+Then use timing features in your `process()` method:
 
 ```rust
-pub mod my_processor;
-pub use my_processor::MyProcessor;
+// Capture event time once to ensure consistency
+let event_time = SystemTime::now();
+
+// Get sequence ID and create message with timing
+let sequence_id = self.timing.next_sequence_id();
+let message = self.timing.create_message_with_event_time_extraction(
+    &self.name,
+    "output_topic",
+    new_payload,
+    event_time  // Use the captured event_time consistently
+).with_sequence_id(sequence_id);
+
+// Check if messages should be dropped due to timing constraints
+if self.timing.should_drop_message(&message) {
+    continue; // Skip processing
+}
 ```
-
-## Development
-
-### Running Tests
-
-```bash
-cargo test
-```
-
-### Generating Test Data
-
-Use the included message generator for MQTT testing:
-
-```bash
-chmod +x sim/message_gen_mpu6500.sh
-./sim/message_gen_mpu6500.sh
-```
-
-### Debugging
-
-Set logging level to debug for detailed output:
-
-```rust
-logging::init_logging("debug");
-```
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new functionality
-4. Ensure `cargo test` and `cargo clippy` pass
-5. Submit a pull request
-
-## License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Related Projects
-
-- **Liminal Firmware**: [Firmware for various sensors and microcontrollers that provide data to **Liminal**](https://github.com/keithbugeja/liminal-firmware) 
-
----
-
-For questions or support, please open an issue in this repository.
