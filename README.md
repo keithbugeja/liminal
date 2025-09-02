@@ -3,7 +3,24 @@
 ```
     ██╗     ██╗███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
     ██║     ██║████╗ ████║██║████╗  ██║██╔══██╗██║     
-    ██║     ██║██╔████╔██║██║██╔██╗ ██║███████║██║     
+    ### Running Your First Pipeline
+
+1. **Run with the default configuration**:
+```bash
+cargo run -- --config config/config.toml
+```
+
+2. **See the output**: The default config demonstrates several features:
+   - Simulated temperature data with timing semantics
+   - Rule-based processing (LED control based on temperature thresholds)
+   - Multiple outputs: console logging, MQTT publishing, and TCP integration
+   - Processing of MQTT sensor data (if available)
+
+3. **Test TCP integration** (optional):
+```bash
+# In another terminal, send JSON data to the TCP input
+echo '{"test": "data", "value": 42}' | nc 127.0.0.1 9999
+```╔████╔██║██║██╔██╗ ██║███████║██║     
     ██║     ██║██║╚██╔╝██║██║██║╚██╗██║██╔══██║██║     
     ███████╗██║██║ ╚═╝ ██║██║██║ ╚████║██║  ██║███████╗
     ╚══════╝╚═╝╚═╝     ╚═╝╚═╝╚═╝  ╚═══╝╚═╝  ╚═╝╚══════╝                     
@@ -11,25 +28,90 @@
 
 A high-performance, configurable data processing pipeline framework written in Rust. Liminal enables real-time data transformation, filtering, and routing through a modular stage-based architecture that you configure with TOML files.
 
-## Goals
+## Key Features
 
-- **Real-time Processing**: Handle continuous data streams with minimal latency
-- **Modular Architecture**: Compose complex pipelines from reusable processing stages
-- **High Performance**: Leverage Rust's performance and safety for data-intensive workloads
-- **Flexible Configuration**: Define pipelines declaratively using TOML configuration
-- **Extensible**: Easy-to-add custom processors for domain-specific needs
+- **Declarative pipeline configuration**: Define complex data processing workflows in TOML without writing code
+- **Pluggable processor architecture**: Easy to write custom input sources, transforms, and output sinks
+- **Comprehensive timing semantics**: Event time, watermarks, sequence tracking, deadlines for real-time processing
+- **Multiple channel types**: Choose communication patterns (broadcast, direct, shared, fanout) with configurable backpressure
+- **Cross-language integration**: TCP protocol with length-prefixed JSON for connecting external systems
 
 ## Architecture
 
 Liminal uses a message-passing architecture where:
 
-- **Messages** carry data with source, topic, payload, and timestamp
-- **Channels** provide communication between stages (broadcast/MPSC)
-- **Processors** transform data and forward to output channels
+- **Messages** carry data with source, topic, payload, and comprehensive timing metadata (event time, ingestion time, sequence IDs, watermarks)
+- **Channels** provide communication between stages with four types: broadcast, direct (point-to-point), shared (MPMC), and fanout
+- **Processors** transform data and forward to output channels using configurable concurrency
 - **Pipelines** compose processors into data processing workflows
-- **Configuration** defines the complete system declaratively
+- **Configuration** defines the complete system declaratively with timing constraints
 
 This design enables high-throughput, low-latency processing with clear separation of concerns.
+
+## Timing Semantics
+
+Liminal provides comprehensive timing semantics for real-time stream processing:
+
+- **Event Time vs Ingestion Time**: Messages track both when events occurred and when they were received
+- **Watermarks**: Automatic watermark generation for handling out-of-order data with three strategies:
+  - **Periodic**: Generate watermarks at fixed intervals
+  - **Punctuated**: Extract watermarks from special fields in the data stream
+  - **Heuristic**: Generate watermarks based on event distribution percentiles
+- **Processing Deadlines**: Configurable timeouts for real-time guarantees
+- **Sequence Tracking**: Automatic sequence ID assignment for message ordering
+- **Jitter Bounds**: Configurable timing constraints for latency-sensitive applications
+
+Configure timing on input sources and transform stages (outputs just sink data):
+
+```toml
+[inputs.sensor_data.timing]
+event_time_field = "timestamp"          # Extract event time from payload
+watermark_strategy = { type = "periodic", interval_ms = 1000 }
+max_lateness_ms = 5000                   # Drop messages older than 5s
+processing_timeout_ms = 10000            # Processing deadline
+jitter_bounds_ms = 100                   # Acceptable timing variation
+metrics_enabled = true                   # Collect timing metrics
+```
+
+## Channel Types
+
+Liminal supports four communication patterns between processing stages:
+
+- **Broadcast** (default): Fast fan-out messaging where slow consumers may miss messages. Best for real-time data streams where latest data is most important.
+- **Direct**: Point-to-point MPSC channel with backpressure. Single producer, single consumer with reliable delivery.
+- **Shared**: Multi-consumer MPMC channel with backpressure. Multiple consumers share the message load - each message goes to exactly one consumer.
+- **Fanout**: Fan-out using multiple MPSC channels with backpressure. Each consumer gets a copy of every message with reliable delivery.
+
+```toml
+[inputs.sensor_data]
+type = "simulated"
+output = "raw_data"
+channel = { type = "broadcast", capacity = 256 }  # or "direct", "shared", "fanout"
+```
+
+## TCP Protocol
+
+Liminal's TCP processors use a length-prefixed JSON protocol for cross-language integration:
+
+```
+[4-byte big-endian length][JSON payload]
+```
+
+This format is compatible with Erlang's `{packet, 4}` option, making it easy to integrate with OTP systems. Both TCP input and output processors support client and server modes:
+
+```toml
+# TCP Input (server mode - listens for connections)
+[inputs.tcp_data]
+type = "tcp_input"
+output = "external_data"
+parameters = { host = "127.0.0.1", port = 9999, mode = "server" }
+
+# TCP Output (client mode - connects to external system)
+[outputs.tcp_sink]
+type = "tcp_output"
+inputs = ["processed_data"]
+parameters = { host = "127.0.0.1", port = 8888, mode = "client" }
+```
 
 ## Current Processors
 
@@ -37,6 +119,7 @@ Liminal ships with these built-in processors:
 
 ### Input Processors
 - **MQTT Subscriber** (`mqtt_sub`): Subscribe to MQTT topics and convert messages to internal format
+- **TCP Input** (`tcp_input`): Receive JSON messages over TCP with length-prefixed protocol
 - **Simulated Data Generator** (`simulated`): Generate synthetic data for testing and development
 
 ### Transform Processors  
@@ -44,8 +127,9 @@ Liminal ships with these built-in processors:
 
 ### Output Processors
 - **Console Logger** (`console`): Display processed messages to stdout
-- **File Logger** (`file`): Sink processed messages to file
+- **File Logger** (`file`): Write processed messages to files with configurable formats
 - **MQTT Publisher** (`mqtt_pub`): Publish messages to MQTT topics
+- **TCP Output** (`tcp_output`): Send JSON messages over TCP with length-prefixed protocol
 
 ## Quick Start
 
@@ -62,81 +146,18 @@ cd liminal
 cargo build --release
 ```
 
-### Running Your First Pipeline
+The default configuration in `config/config.toml` demonstrates:
+- Simulated temperature data generation with timing semantics
+- MQTT sensor data processing (if broker available)
+- TCP input/output for external system integration
+- Rule-based processing with mathematical expressions
+- Multiple output destinations
 
-1. **Start an MQTT broker** (for MQTT examples):
+For MQTT examples, you can optionally start a broker:
 ```bash
 # Using Docker
 docker run -it -p 1883:1883 eclipse-mosquitto
-
-# Or using Homebrew on macOS
-brew install mosquitto
-mosquitto -v
 ```
-
-2. **Configure a pipeline** in `config/config.toml` (or try the examples in `config/examples/`):
-```toml
-# Input: Subscribe to MQTT sensor data
-[inputs.mqtt_sensors]
-type = "mqtt_sub"
-output = "all_sensor_data"
-channel = { type = "broadcast", capacity = 1000 }
-parameters = { 
-    broker_url = "mqtt://localhost:1883", 
-    client_id = "liminal_rule_test",
-    topics = ["liminal/sensors/+/+"]
-}
-
-# Pipeline: Process and enrich sensor data  
-[pipelines.mqtt_pipeline]
-description = "Processes MQTT sensor data with rules"
-
-[pipelines.mqtt_pipeline.stages.rule_enricher]
-type = "rule"
-inputs = ["all_sensor_data"]
-output = "enriched_data"
-channel = { type = "broadcast", capacity = 500 }
-
-# Add device metadata for ESP32 devices
-[[pipelines.mqtt_pipeline.stages.rule_enricher.parameters.rules]]
-condition = { field_path = "device_id", operation = "startswith", value = "esp32-" }
-actions = [
-    { type = "set_field", field_path = "device_type", value = "esp32" },
-    { type = "copy_field", source_field = "device_id", target_field = "original_device_id" }
-]
-
-# Compute acceleration magnitude from IMU data
-[[pipelines.mqtt_pipeline.stages.rule_enricher.parameters.rules]]
-condition = { field_path = "sensor_type", operation = "equals", value = "imu" }
-actions = [
-    { type = "compute_field", field_path = "acceleration_magnitude", 
-      expression = "sqrt(accelerometer.x^2 + accelerometer.y^2 + accelerometer.z^2)" }
-]
-
-# Output: Display enriched data
-[outputs.enriched_data_log]
-type = "console"
-inputs = ["enriched_data"]
-```
-
-3. **Run Liminal**:
-```bash
-cargo run
-```
-
-4. **Send test data**:
-```bash
-# Send sample IMU data to see the rule processor in action
-mosquitto_pub -h localhost -t liminal/sensors/esp32-001/imu -m '{
-  "device_id": "esp32-001",
-  "sensor_type": "imu", 
-  "accelerometer": {"x": 0.6, "y": 0.7, "z": 0.3},
-  "gyroscope": {"x": 3.5, "y": 0.7, "z": -0.6},
-  "temperature": 26.8
-}'
-```
-
-You should see enriched output with computed `acceleration_magnitude` and added metadata fields.
 
 ## Example Configurations
 
@@ -235,7 +256,7 @@ Liminal uses TOML configuration files to define processing pipelines. The main c
 ```toml
 # Input sources
 [inputs.input_name]
-type = "processor_type"
+type = "processor_type"        # simulated, mqtt_sub, tcp_input
 output = "channel_name"
 concurrency = { type = "thread" }  
 channel = { type = "broadcast", capacity = 256 }
@@ -243,21 +264,32 @@ channel = { type = "broadcast", capacity = 256 }
 [inputs.input_name.parameters]
 # processor-specific config here
 
+# Optional timing configuration (inputs and transforms only)
+[inputs.input_name.timing]
+event_time_field = "timestamp"
+watermark_strategy = { type = "periodic", interval_ms = 1000 }
+max_lateness_ms = 5000
+processing_timeout_ms = 10000
+jitter_bounds_ms = 100
+metrics_enabled = true
+
 # Processing pipelines
 [pipelines.pipeline_name]
 description = "Pipeline description"
 
 [pipelines.pipeline_name.stages.stage_name]
-type = "processor_type"
+type = "rule"                  # currently only rule processor available
 inputs = ["input_channel"]
 output = "output_channel"
+concurrency = { type = "thread" }  
+channel = { type = "broadcast", capacity = 256 }
 
 [pipelines.pipeline_name.stages.stage_name.parameters]
 # processor-specific config here
 
-# Output sinks
+# Output sinks (no timing config - they just sink data)
 [outputs.output_name]
-type = "processor_type"
+type = "processor_type"        # console, file, mqtt_pub, tcp_output
 inputs = ["input_channel"]
 
 [outputs.output_name.parameters]
@@ -279,6 +311,37 @@ field_out = "temperature"
 fields_in = ["temp", "humidity"]
 fields_out = ["temperature", "humidity_pct"]
 ```
+
+### Rule Actions
+
+The rule processor supports these actions for data transformation:
+
+```toml
+[[pipelines.stage_name.parameters.rules]]
+condition = { field_path = "temperature", operation = ">", value = 25.0 }
+actions = [
+    { type = "set_field", field_path = "status", value = "hot" },
+    { type = "compute_field", field_path = "temp_f", expression = "temperature * 9/5 + 32" },
+    { type = "copy_field", source_field = "device", target_field = "sensor_id" },
+    { type = "rename_field", old_field = "temp", new_field = "temperature" },
+    { type = "remove_field", field_path = "debug_info" },
+    { type = "keep_only_fields", field_paths = ["temperature", "status"] },
+    { type = "pass_through" }
+]
+else_actions = [
+    { type = "drop_message" }
+]
+```
+
+Available actions:
+- **set_field**: Set a field to a constant value
+- **compute_field**: Calculate field using mathematical expressions
+- **copy_field**: Copy value from one field to another
+- **rename_field**: Rename a field
+- **remove_field**: Remove a field from the message
+- **keep_only_fields**: Keep only specified fields, remove all others
+- **pass_through**: Let the message pass unchanged
+- **drop_message**: Drop the message entirely
 
 ## Adding Custom Processors
 
