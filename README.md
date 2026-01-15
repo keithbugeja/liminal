@@ -380,7 +380,7 @@ If you use this framework in academic work (papers, theses, or technical reports
   year         = {2026},
   publisher    = {Zenodo},
   version      = {v0.2.0-alpha},
-  doi          = {10.5281/zenodo.18256610},
-  url          = {https://doi.org/10.5281/zenodo.18256610}
+  doi          = {10.5281/zenodo.18256609},
+  url          = {https://doi.org/10.5281/zenodo.18256609}
 }
 ```
