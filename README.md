@@ -384,9 +384,3 @@ If you use this framework in academic work (papers, theses, or technical reports
   url          = {https://doi.org/10.5281/zenodo.18256610}
 }
 ```
-
-Alternatively, you may cite the project using the concept DOI, which always refers to the latest version:
-
-```
-https://doi.org/10.5281/zenodo.18256610
-```
