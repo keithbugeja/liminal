@@ -376,7 +376,7 @@ If you use this framework in academic work (papers, theses, or technical reports
 ```bibtex
 @software{bugeja_liminal_2026,
   author       = {Keith Bugeja},
-  title        = {Liminal: A Modular Framework for Runtime Monitoring and Real-Time Data Processing},
+  title        = {Liminal: A Modular Framework for Real-Time Data Processing Pipelines},
   year         = {2026},
   publisher    = {Zenodo},
   version      = {v0.2.0-alpha},
