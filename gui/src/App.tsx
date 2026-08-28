@@ -26,11 +26,13 @@ import {
   CircleDot,
   FileJson,
   GitBranch,
+  Info,
   Loader2,
+  Network,
   RefreshCw,
   Search,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 type GraphNodeKind = "input" | "pipeline_stage" | "output";
 type GraphLane = "inputs" | "pipeline_stages" | "outputs";
@@ -97,6 +99,11 @@ type FlowNodeData = {
   diagnostics: GraphDiagnostic[];
   selectedChannelName: string | null;
   onSelectChannel: (channelName: string) => void;
+};
+
+type FocusState = {
+  activeNodeIds: Set<string>;
+  activeEdgeIds: Set<string>;
 };
 
 const laneX: Record<GraphLane, number> = {
@@ -220,7 +227,13 @@ function App() {
           </div>
 
           <SummaryPanel graph={graph} />
-          <DiagnosticsPanel graph={graph} onSelectNode={setSelectedNodeId} />
+          <DiagnosticsPanel
+            graph={graph}
+            onSelectNode={(id) => {
+              setSelectedNodeId(id);
+              setSelectedChannelName(null);
+            }}
+          />
         </aside>
 
         <main className="workspace">
@@ -235,6 +248,14 @@ function App() {
             loadState={loadState}
           />
         </main>
+
+        <InspectorPanel
+          graph={graph}
+          selectedNodeId={selectedNodeId}
+          selectedChannelName={selectedChannelName}
+          onSelectNode={setSelectedNodeId}
+          onSelectChannel={setSelectedChannelName}
+        />
       </div>
     </ReactFlowProvider>
   );
@@ -308,6 +329,267 @@ function DiagnosticsPanel({
   );
 }
 
+function InspectorPanel({
+  graph,
+  selectedNodeId,
+  selectedChannelName,
+  onSelectNode,
+  onSelectChannel,
+}: {
+  graph: ResolvedPipelineGraph | null;
+  selectedNodeId: string | null;
+  selectedChannelName: string | null;
+  onSelectNode: (id: string | null) => void;
+  onSelectChannel: (channelName: string | null) => void;
+}) {
+  const selectedNode = graph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedChannel =
+    graph?.channels.find((channel) => channel.name === selectedChannelName) ?? null;
+  const nodeDiagnostics = selectedNode
+    ? graph?.diagnostics.filter((diagnostic) => diagnostic.node_ids.includes(selectedNode.id)) ?? []
+    : [];
+  const channelDiagnostics = selectedChannelName
+    ? graph?.diagnostics.filter((diagnostic) => diagnostic.channel_name === selectedChannelName) ?? []
+    : [];
+  const selectNode = useCallback(
+    (id: string | null) => {
+      onSelectNode(id);
+      onSelectChannel(null);
+    },
+    [onSelectChannel, onSelectNode],
+  );
+  const selectChannel = useCallback(
+    (channelName: string | null) => {
+      onSelectChannel(channelName);
+      if (channelName) {
+        onSelectNode(null);
+      }
+    },
+    [onSelectChannel, onSelectNode],
+  );
+
+  return (
+    <aside className="inspector">
+      <div className="inspector-header">
+        <Info size={17} />
+        <span>Inspector</span>
+      </div>
+
+      {!graph ? (
+        <p className="empty-state">No graph loaded.</p>
+      ) : selectedChannel ? (
+        <ChannelInspector
+          channel={selectedChannel}
+          graph={graph}
+          diagnostics={channelDiagnostics}
+          onSelectNode={selectNode}
+        />
+      ) : selectedChannelName ? (
+        <MissingChannelInspector channelName={selectedChannelName} diagnostics={channelDiagnostics} />
+      ) : selectedNode ? (
+        <NodeInspector
+          node={selectedNode}
+          graph={graph}
+          diagnostics={nodeDiagnostics}
+          onSelectChannel={selectChannel}
+        />
+      ) : (
+        <div className="inspector-empty">
+          <Network size={24} />
+          <p>Select a node, channel, or edge.</p>
+        </div>
+      )}
+    </aside>
+  );
+}
+
+function NodeInspector({
+  node,
+  graph,
+  diagnostics,
+  onSelectChannel,
+}: {
+  node: GraphNode;
+  graph: ResolvedPipelineGraph;
+  diagnostics: GraphDiagnostic[];
+  onSelectChannel: (channelName: string | null) => void;
+}) {
+  const incomingEdges = graph.edges.filter((edge) => edge.target_node_id === node.id);
+  const outgoingEdges = graph.edges.filter((edge) => edge.source_node_id === node.id);
+
+  return (
+    <div className="inspector-body">
+      <InspectorTitle eyebrow={node.processor_type} title={node.display_name} />
+      <KeyValue label="Kind" value={node.kind} />
+      <KeyValue label="Config path" value={node.config_path} />
+      {node.pipeline_name && <KeyValue label="Pipeline" value={node.pipeline_name} />}
+      <KeyValue label="Node ID" value={node.id} />
+
+      <InspectorSection title="Inputs">
+        {node.input_channels.length === 0 ? (
+          <p className="empty-state">No input channels.</p>
+        ) : (
+          <ChannelButtonList channels={node.input_channels} onSelectChannel={onSelectChannel} />
+        )}
+      </InspectorSection>
+
+      <InspectorSection title="Output">
+        {node.output_channel ? (
+          <ChannelButtonList channels={[node.output_channel]} onSelectChannel={onSelectChannel} />
+        ) : (
+          <p className="empty-state">No output channel.</p>
+        )}
+      </InspectorSection>
+
+      <InspectorSection title="Edges">
+        <KeyValue label="Incoming" value={String(incomingEdges.length)} />
+        <KeyValue label="Outgoing" value={String(outgoingEdges.length)} />
+      </InspectorSection>
+
+      <DiagnosticsList diagnostics={diagnostics} />
+    </div>
+  );
+}
+
+function ChannelInspector({
+  channel,
+  graph,
+  diagnostics,
+  onSelectNode,
+}: {
+  channel: GraphChannel;
+  graph: ResolvedPipelineGraph;
+  diagnostics: GraphDiagnostic[];
+  onSelectNode: (id: string | null) => void;
+}) {
+  return (
+    <div className="inspector-body">
+      <InspectorTitle eyebrow="Channel" title={channel.name} />
+      <KeyValue label="Type" value={channel.channel_type} />
+      <KeyValue label="Capacity" value={String(channel.capacity)} />
+
+      <InspectorSection title="Producers">
+        <NodeButtonList nodeIds={channel.producer_node_ids} graph={graph} onSelectNode={onSelectNode} />
+      </InspectorSection>
+
+      <InspectorSection title="Consumers">
+        <NodeButtonList nodeIds={channel.consumer_node_ids} graph={graph} onSelectNode={onSelectNode} />
+      </InspectorSection>
+
+      <DiagnosticsList diagnostics={diagnostics} />
+    </div>
+  );
+}
+
+function MissingChannelInspector({
+  channelName,
+  diagnostics,
+}: {
+  channelName: string;
+  diagnostics: GraphDiagnostic[];
+}) {
+  return (
+    <div className="inspector-body">
+      <InspectorTitle eyebrow="Unresolved Channel" title={channelName} />
+      <DiagnosticsList diagnostics={diagnostics} />
+    </div>
+  );
+}
+
+function InspectorTitle({ eyebrow, title }: { eyebrow: string; title: string }) {
+  return (
+    <div className="inspector-title">
+      <span>{eyebrow}</span>
+      <h2>{title}</h2>
+    </div>
+  );
+}
+
+function InspectorSection({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section className="inspector-section">
+      <h3>{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function KeyValue({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="key-value">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ChannelButtonList({
+  channels,
+  onSelectChannel,
+}: {
+  channels: string[];
+  onSelectChannel: (channelName: string | null) => void;
+}) {
+  return (
+    <div className="inspector-list">
+      {channels.map((channel) => (
+        <button key={channel} onClick={() => onSelectChannel(channel)}>
+          {channel}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function NodeButtonList({
+  nodeIds,
+  graph,
+  onSelectNode,
+}: {
+  nodeIds: string[];
+  graph: ResolvedPipelineGraph;
+  onSelectNode: (id: string | null) => void;
+}) {
+  if (nodeIds.length === 0) {
+    return <p className="empty-state">None.</p>;
+  }
+
+  return (
+    <div className="inspector-list">
+      {nodeIds.map((nodeId) => {
+        const node = graph.nodes.find((candidate) => candidate.id === nodeId);
+        return (
+          <button key={nodeId} onClick={() => onSelectNode(nodeId)}>
+            {node?.display_name ?? nodeId}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function DiagnosticsList({ diagnostics }: { diagnostics: GraphDiagnostic[] }) {
+  return (
+    <InspectorSection title="Diagnostics">
+      {diagnostics.length === 0 ? (
+        <p className="empty-state">No diagnostics.</p>
+      ) : (
+        <div className="inspector-diagnostics">
+          {diagnostics.map((diagnostic, index) => (
+            <div
+              key={`${diagnostic.kind}-${diagnostic.channel_name}-${index}`}
+              className={`inspector-diagnostic ${diagnostic.severity}`}
+            >
+              <span>{diagnostic.severity}</span>
+              <p>{diagnostic.message}</p>
+            </div>
+          ))}
+        </div>
+      )}
+    </InspectorSection>
+  );
+}
+
 function GraphCanvas({
   graph,
   selectedNodeId,
@@ -328,6 +610,10 @@ function GraphCanvas({
   loadState: "idle" | "loading" | "error";
 }) {
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
+  const focusState = useMemo(
+    () => graphFocusState(graph, selectedNodeId, selectedChannelName),
+    [graph, selectedChannelName, selectedNodeId],
+  );
   const channelByName = useMemo(() => {
     const map = new Map<string, GraphChannel>();
     graph?.channels.forEach((channel) => map.set(channel.name, channel));
@@ -348,6 +634,7 @@ function GraphCanvas({
         node.display_name.toLowerCase().includes(query) ||
         node.processor_type.toLowerCase().includes(query) ||
         channels.includes(query);
+      const isFocusMuted = Boolean(focusState) && !focusState?.activeNodeIds.has(node.id);
 
       return {
         id: node.id,
@@ -363,16 +650,27 @@ function GraphCanvas({
           selectedChannelName,
           onSelectChannel,
         },
-        className: matches ? "" : "dimmed-node",
+        className: [
+          matches ? "" : "dimmed-node",
+          isFocusMuted ? "focus-muted" : "",
+          focusState?.activeNodeIds.has(node.id) ? "focus-active" : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
       };
     });
-  }, [diagnosticsByNode, filterText, graph, onSelectChannel, selectedChannelName, selectedNodeId]);
+  }, [diagnosticsByNode, filterText, focusState, graph, onSelectChannel, selectedChannelName, selectedNodeId]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     return (graph?.edges ?? []).map((edge, index) => {
       const channel = channelByName.get(edge.channel_name);
       const color = colorForChannel(edge.channel_name);
       const laneOffset = ((index % 5) - 2) * 14;
+      const pathState = focusState
+        ? focusState.activeEdgeIds.has(edge.id)
+          ? "active"
+          : "muted"
+        : null;
 
       return {
         id: edge.id,
@@ -392,12 +690,13 @@ function GraphCanvas({
           channelName: edge.channel_name,
           color,
           laneOffset,
+          pathState,
         },
         animated: channel?.channel_type === "broadcast" || channel?.channel_type === "fanout",
         style: { stroke: color, strokeWidth: 2.1 },
       };
     });
-  }, [channelByName, graph]);
+  }, [channelByName, focusState, graph]);
 
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>(flowNodes);
   const [edges, setEdges] = useState<Edge[]>(flowEdges);
@@ -456,7 +755,17 @@ function GraphCanvas({
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onNodeDragStop={(_, node) => setNodes((currentNodes) => mergeDraggedNode(currentNodes, node))}
-          onNodeClick={(_, node) => onSelectNode(node.id)}
+          onNodeClick={(_, node) => {
+            onSelectNode(node.id);
+            onSelectChannel(null);
+          }}
+          onEdgeClick={(_, edge) => {
+            const channelName = (edge.data as ChannelEdgeData | undefined)?.channelName;
+            if (channelName) {
+              onSelectChannel(channelName);
+              onSelectNode(null);
+            }
+          }}
           onPaneClick={() => {
             onSelectNode(null);
             onSelectChannel(null);
@@ -557,6 +866,7 @@ type ChannelEdgeData = {
   channelName: string;
   color: string;
   laneOffset: number;
+  pathState: "active" | "muted" | null;
 };
 
 function ChannelEdge({
@@ -572,7 +882,7 @@ function ChannelEdge({
   selected,
   data,
 }: EdgeProps<Edge<ChannelEdgeData>>) {
-  const edgeData = data ?? { channelName: "", color: "#67e5d8", laneOffset: 0 };
+  const edgeData = data ?? { channelName: "", color: "#67e5d8", laneOffset: 0, pathState: null };
   const [basePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -593,15 +903,30 @@ function ChannelEdge({
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
-        className={selected ? "channel-edge selected" : "channel-edge"}
+        className={[
+          "channel-edge",
+          selected ? "selected" : "",
+          edgeData.pathState === "active" ? "focus-active" : "",
+          edgeData.pathState === "muted" ? "focus-muted" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
         style={{
           ...style,
           stroke: edgeData.color,
         }}
       />
       <EdgeLabelRenderer>
-        <button
-          className="edge-label nodrag nopan"
+        <div
+          className={[
+            "edge-label",
+            "nodrag",
+            "nopan",
+            edgeData.pathState === "active" ? "focus-active" : "",
+            edgeData.pathState === "muted" ? "focus-muted" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
           style={{
             left: labelX,
             top: labelY,
@@ -611,7 +936,7 @@ function ChannelEdge({
           title={edgeData.channelName}
         >
           {edgeData.channelName}
-        </button>
+        </div>
       </EdgeLabelRenderer>
     </>
   );
@@ -677,6 +1002,67 @@ function diagnosticsByNodeId(graph: ResolvedPipelineGraph | null) {
   });
 
   return map;
+}
+
+function graphFocusState(
+  graph: ResolvedPipelineGraph | null,
+  selectedNodeId: string | null,
+  selectedChannelName: string | null,
+): FocusState | null {
+  if (!graph) {
+    return null;
+  }
+
+  if (selectedChannelName) {
+    const activeEdgeIds = new Set(
+      graph.edges
+        .filter((edge) => edge.channel_name === selectedChannelName)
+        .map((edge) => edge.id),
+    );
+    const activeNodeIds = new Set<string>();
+
+    graph.edges
+      .filter((edge) => edge.channel_name === selectedChannelName)
+      .forEach((edge) => {
+        activeNodeIds.add(edge.source_node_id);
+        activeNodeIds.add(edge.target_node_id);
+      });
+
+    const channel = graph.channels.find((candidate) => candidate.name === selectedChannelName);
+    channel?.producer_node_ids.forEach((nodeId) => activeNodeIds.add(nodeId));
+    channel?.consumer_node_ids.forEach((nodeId) => activeNodeIds.add(nodeId));
+
+    return { activeNodeIds, activeEdgeIds };
+  }
+
+  if (!selectedNodeId) {
+    return null;
+  }
+
+  const activeNodeIds = new Set<string>([selectedNodeId]);
+  const activeEdgeIds = new Set<string>();
+  const frontier = [selectedNodeId];
+
+  while (frontier.length > 0) {
+    const nodeId = frontier.shift();
+    if (!nodeId) {
+      continue;
+    }
+
+    graph.edges
+      .filter((edge) => edge.source_node_id === nodeId || edge.target_node_id === nodeId)
+      .forEach((edge) => {
+        const nextNodeId = edge.source_node_id === nodeId ? edge.target_node_id : edge.source_node_id;
+        activeEdgeIds.add(edge.id);
+
+        if (!activeNodeIds.has(nextNodeId)) {
+          activeNodeIds.add(nextNodeId);
+          frontier.push(nextNodeId);
+        }
+      });
+  }
+
+  return { activeNodeIds, activeEdgeIds };
 }
 
 function configFileName(path: string) {
