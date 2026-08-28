@@ -174,6 +174,17 @@ const defaultInspectorWidth = 520;
 const minInspectorWidth = 330;
 const maxInspectorWidth = 980;
 const inspectorWidthStorageKey = "liminal.inspectorWidth";
+const conditionOperationOptions = [
+  "equals",
+  "not_equals",
+  "startswith",
+  "endswith",
+  "contains",
+  ">",
+  ">=",
+  "<",
+  "<=",
+];
 const nodeTypes = { liminalNode: LiminalNode };
 const edgeTypes = { channelEdge: ChannelEdge };
 const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "#78d879"];
@@ -281,6 +292,30 @@ function App() {
           nodeId,
           parameterKey,
           value,
+        });
+        setGraph(nextGraph);
+        setSelectedNodeId(nodeId);
+        setSelectedChannelName(null);
+        setSelectedDiagnosticKey(null);
+        setSaveState("idle");
+      } catch (caught) {
+        setError(String(caught));
+        setSaveState("error");
+      }
+    },
+    [configPath],
+  );
+  const updateNodeParameterJson = useCallback(
+    async (nodeId: string, parameterKey: string, value: JsonValue) => {
+      setSaveState("saving");
+      setError(null);
+
+      try {
+        const nextGraph = await invoke<ResolvedPipelineGraph>("update_node_parameter_json", {
+          path: configPath,
+          nodeId,
+          parameterKey,
+          valueJson: JSON.stringify(value),
         });
         setGraph(nextGraph);
         setSelectedNodeId(nodeId);
@@ -461,6 +496,7 @@ function App() {
           onSelectNode={selectNode}
           onSelectChannel={selectChannel}
           onUpdateNodeParameter={updateNodeParameter}
+          onUpdateNodeParameterJson={updateNodeParameterJson}
           onUpdateNodeField={updateNodeField}
           saveState={saveState}
         />
@@ -619,6 +655,7 @@ function InspectorPanel({
   onSelectNode,
   onSelectChannel,
   onUpdateNodeParameter,
+  onUpdateNodeParameterJson,
   onUpdateNodeField,
   saveState,
 }: {
@@ -631,6 +668,7 @@ function InspectorPanel({
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
   onUpdateNodeParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
+  onUpdateNodeParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
   onUpdateNodeField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
   saveState: "idle" | "saving" | "error";
 }) {
@@ -696,6 +734,7 @@ function InspectorPanel({
           selectedDiagnostic={selectedDiagnostic}
           onSelectChannel={selectChannel}
           onUpdateParameter={onUpdateNodeParameter}
+          onUpdateParameterJson={onUpdateNodeParameterJson}
           onUpdateField={onUpdateNodeField}
           saveState={saveState}
         />
@@ -718,6 +757,7 @@ function NodeInspector({
   selectedDiagnostic,
   onSelectChannel,
   onUpdateParameter,
+  onUpdateParameterJson,
   onUpdateField,
   saveState,
 }: {
@@ -729,6 +769,7 @@ function NodeInspector({
   selectedDiagnostic: GraphDiagnostic | null;
   onSelectChannel: (channelName: string | null) => void;
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
+  onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
   onUpdateField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
   saveState: "idle" | "saving" | "error";
 }) {
@@ -887,6 +928,7 @@ function NodeInspector({
                 fieldSpec={parameterFields.find((field) => field.key === parameter.key)}
                 saveState={saveState}
                 onUpdateParameter={onUpdateParameter}
+                onUpdateParameterJson={onUpdateParameterJson}
               />
             ))}
             {missingParameterFields.map((field) => (
@@ -907,12 +949,14 @@ function ParameterRow({
   fieldSpec,
   saveState,
   onUpdateParameter,
+  onUpdateParameterJson,
 }: {
   nodeId: string;
   parameter: GraphParameter;
   fieldSpec?: FieldSpec;
   saveState: "idle" | "saving" | "error";
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
+  onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
 }) {
   const [draftValue, setDraftValue] = useState(parameter.value);
   const isDirty = draftValue !== parameter.value;
@@ -934,7 +978,14 @@ function ParameterRow({
         </div>
         {fieldSpec?.help && <p className="parameter-help">{fieldSpec.help}</p>}
         {fieldSpec?.renderer === "rule_builder" && fieldSpec.schema ? (
-          <RuleParameterPreview value={parameter.raw_value} schema={fieldSpec.schema} />
+          <RuleParameterEditor
+            nodeId={nodeId}
+            parameterKey={parameter.key}
+            value={parameter.raw_value}
+            schema={fieldSpec.schema}
+            saveState={saveState}
+            onUpdateParameterJson={onUpdateParameterJson}
+          />
         ) : fieldSpec?.schema ? (
           <NestedParameterPreview value={parameter.raw_value} schema={fieldSpec.schema} />
         ) : (
@@ -1001,23 +1052,73 @@ function MissingParameterRow({ field }: { field: FieldSpec }) {
   );
 }
 
-function RuleParameterPreview({
+function RuleParameterEditor({
+  nodeId,
+  parameterKey,
   value,
   schema,
+  saveState,
+  onUpdateParameterJson,
 }: {
+  nodeId: string;
+  parameterKey: string;
   value: JsonValue;
   schema: SchemaSpec;
+  saveState: "idle" | "saving" | "error";
+  onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
 }) {
-  const rules = Array.isArray(value) ? value : [];
+  const [draftRules, setDraftRules] = useState<JsonValue[]>(Array.isArray(value) ? value : []);
   const actionSchema = ruleActionSchema(schema);
+  const isDirty = JSON.stringify(draftRules) !== JSON.stringify(Array.isArray(value) ? value : []);
+
+  useEffect(() => {
+    setDraftRules(Array.isArray(value) ? value : []);
+  }, [value]);
 
   return (
-    <div className="rule-preview">
-      {rules.length === 0 ? (
+    <div className="rule-editor">
+      <div className="rule-editor-toolbar">
+        <button
+          onClick={() =>
+            setDraftRules((currentRules) => [
+              ...currentRules,
+              defaultRule(actionSchema),
+            ])
+          }
+        >
+          Add Rule
+        </button>
+        <button disabled={!isDirty || saveState === "saving"} onClick={() => setDraftRules(Array.isArray(value) ? value : [])}>
+          Revert
+        </button>
+        <button
+          disabled={!isDirty || saveState === "saving"}
+          onClick={() => onUpdateParameterJson(nodeId, parameterKey, draftRules)}
+        >
+          {saveState === "saving" ? "Saving" : "Save Rules"}
+        </button>
+      </div>
+      {draftRules.length === 0 ? (
         <p className="empty-state">No rules configured.</p>
       ) : (
-        rules.map((rule, index) => (
-          <RuleCard key={index} rule={rule} index={index} actionSchema={actionSchema} />
+        draftRules.map((rule, index) => (
+          <RuleCard
+            key={index}
+            rule={rule}
+            index={index}
+            actionSchema={actionSchema}
+            onChange={(nextRule) => {
+              setDraftRules((currentRules) =>
+                currentRules.map((currentRule, currentIndex) => (currentIndex === index ? nextRule : currentRule)),
+              );
+            }}
+            onMove={(direction) => setDraftRules((currentRules) => moveArrayItem(currentRules, index, direction))}
+            onRemove={() =>
+              setDraftRules((currentRules) => currentRules.filter((_, currentIndex) => currentIndex !== index))
+            }
+            canMoveUp={index > 0}
+            canMoveDown={index < draftRules.length - 1}
+          />
         ))
       )}
     </div>
@@ -1028,10 +1129,20 @@ function RuleCard({
   rule,
   index,
   actionSchema,
+  onChange,
+  onMove,
+  onRemove,
+  canMoveUp,
+  canMoveDown,
 }: {
   rule: JsonValue;
   index: number;
   actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+  onChange: (rule: JsonValue) => void;
+  onMove: (direction: -1 | 1) => void;
+  onRemove: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
 }) {
   const ruleObject = isJsonObject(rule) ? rule : {};
   const condition = isJsonObject(ruleObject.condition) ? ruleObject.condition : {};
@@ -1043,16 +1154,56 @@ function RuleCard({
       <div className="rule-card-header">
         <span>Rule {index + 1}</span>
         <strong>{ruleSummary(condition, actions.length, elseActions.length)}</strong>
+        <div className="rule-button-group">
+          <button disabled={!canMoveUp} onClick={() => onMove(-1)} aria-label={`Move rule ${index + 1} up`}>
+            Up
+          </button>
+          <button disabled={!canMoveDown} onClick={() => onMove(1)} aria-label={`Move rule ${index + 1} down`}>
+            Down
+          </button>
+          <button onClick={onRemove} aria-label={`Remove rule ${index + 1}`}>
+            Remove
+          </button>
+        </div>
       </div>
 
       <div className="rule-condition">
-        <RuleDatum label="Field" value={condition.field_path ?? null} />
-        <RuleDatum label="Operation" value={condition.operation ?? null} />
-        <RuleDatum label="Value" value={condition.value ?? null} />
+        <RuleInput
+          label="Field"
+          value={formatJsonValue(condition.field_path ?? "")}
+          onChange={(nextValue) =>
+            onChange(setObjectValue(ruleObject, ["condition", "field_path"], nextValue))
+          }
+        />
+        <RuleSelect
+          label="Operation"
+          value={typeof condition.operation === "string" ? condition.operation : "equals"}
+          options={conditionOperationOptions}
+          onChange={(nextValue) =>
+            onChange(setObjectValue(ruleObject, ["condition", "operation"], nextValue))
+          }
+        />
+        <RuleInput
+          label="Value"
+          value={formatJsonValue(condition.value ?? "")}
+          onChange={(nextValue) =>
+            onChange(setObjectValue(ruleObject, ["condition", "value"], parseJsonLikeValue(nextValue)))
+          }
+        />
       </div>
 
-      <RuleActionList title="Actions" actions={actions} actionSchema={actionSchema} />
-      <RuleActionList title="Else Actions" actions={elseActions} actionSchema={actionSchema} />
+      <RuleActionList
+        title="Actions"
+        actions={actions}
+        actionSchema={actionSchema}
+        onChange={(nextActions) => onChange({ ...ruleObject, actions: nextActions })}
+      />
+      <RuleActionList
+        title="Else Actions"
+        actions={elseActions}
+        actionSchema={actionSchema}
+        onChange={(nextActions) => onChange({ ...ruleObject, else_actions: nextActions })}
+      />
     </div>
   );
 }
@@ -1061,23 +1212,49 @@ function RuleActionList({
   title,
   actions,
   actionSchema,
+  onChange,
 }: {
   title: string;
   actions: JsonValue[];
   actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+  onChange: (actions: JsonValue[]) => void;
 }) {
   return (
     <div className="rule-action-section">
       <div className="rule-action-section-header">
         <span>{title}</span>
         <strong>{actions.length}</strong>
+        <button
+          disabled={!actionSchema}
+          onClick={() =>
+            actionSchema && onChange([...actions, defaultActionForVariant(actionSchema, actionSchema.variants[0]?.tag_value ?? "")])
+          }
+        >
+          Add
+        </button>
       </div>
       {actions.length === 0 ? (
         <p className="empty-state">None.</p>
       ) : (
         <div className="rule-action-list">
           {actions.map((action, index) => (
-            <RuleActionCard key={index} action={action} index={index} actionSchema={actionSchema} />
+            <RuleActionCard
+              key={index}
+              action={action}
+              index={index}
+              actionSchema={actionSchema}
+              onChange={(nextAction) => {
+                onChange(
+                  actions.map((currentAction, currentIndex) =>
+                    currentIndex === index ? nextAction : currentAction,
+                  ),
+                );
+              }}
+              onMove={(direction) => onChange(moveArrayItem(actions, index, direction))}
+              onRemove={() => onChange(actions.filter((_, currentIndex) => currentIndex !== index))}
+              canMoveUp={index > 0}
+              canMoveDown={index < actions.length - 1}
+            />
           ))}
         </div>
       )}
@@ -1089,10 +1266,20 @@ function RuleActionCard({
   action,
   index,
   actionSchema,
+  onChange,
+  onMove,
+  onRemove,
+  canMoveUp,
+  canMoveDown,
 }: {
   action: JsonValue;
   index: number;
   actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+  onChange: (action: JsonValue) => void;
+  onMove: (direction: -1 | 1) => void;
+  onRemove: () => void;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
 }) {
   const actionObject = isJsonObject(action) ? action : {};
   const type = typeof actionObject.type === "string" ? actionObject.type : "";
@@ -1115,23 +1302,136 @@ function RuleActionCard({
     <div className="rule-action-card">
       <div className="rule-action-title">
         <span>Action {index + 1}</span>
-        <strong>{variant?.label ?? labelFromKey(type || "action")}</strong>
+        {actionSchema ? (
+          <select
+            value={type}
+            onChange={(event) => onChange(defaultActionForVariant(actionSchema, event.target.value))}
+          >
+            {actionSchema.variants.map((candidate) => (
+              <option key={candidate.tag_value} value={candidate.tag_value}>
+                {candidate.label}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <strong>{variant?.label ?? labelFromKey(type || "action")}</strong>
+        )}
+        <div className="rule-button-group">
+          <button disabled={!canMoveUp} onClick={() => onMove(-1)} aria-label={`Move action ${index + 1} up`}>
+            Up
+          </button>
+          <button disabled={!canMoveDown} onClick={() => onMove(1)} aria-label={`Move action ${index + 1} down`}>
+            Down
+          </button>
+          <button onClick={onRemove} aria-label={`Remove action ${index + 1}`}>
+            Remove
+          </button>
+        </div>
       </div>
       <div className="rule-action-fields">
         {fields.map((field) => (
-          <RuleDatum key={field.key} label={field.label} value={actionObject[field.key] ?? null} />
+          <RuleFieldEditor
+            key={field.key}
+            field={field}
+            value={actionObject[field.key] ?? ""}
+            onChange={(nextValue) => onChange({ ...actionObject, [field.key]: nextValue })}
+          />
         ))}
       </div>
     </div>
   );
 }
 
-function RuleDatum({ label, value }: { label: string; value: JsonValue }) {
+function RuleFieldEditor({
+  field,
+  value,
+  onChange,
+}: {
+  field: FieldSpec;
+  value: JsonValue;
+  onChange: (value: JsonValue) => void;
+}) {
+  if (field.kind === "boolean") {
+    return (
+      <label className="rule-datum rule-checkbox">
+        <span>{field.label}</span>
+        <input
+          type="checkbox"
+          checked={value === true}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+      </label>
+    );
+  }
+
+  if (field.kind === "enum" && field.options.length > 0) {
+    return (
+      <label className="rule-datum">
+        <span>{field.label}</span>
+        <select
+          value={typeof value === "string" ? value : field.options[0]}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {field.options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      </label>
+    );
+  }
+
   return (
-    <div className="rule-datum">
+    <RuleInput
+      label={field.label}
+      value={formatJsonValue(value)}
+      onChange={(nextValue) =>
+        onChange(field.kind === "json_value" ? parseJsonLikeValue(nextValue) : nextValue)
+      }
+    />
+  );
+}
+
+function RuleInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="rule-datum">
       <span>{label}</span>
-      <strong title={formatJsonValue(value)}>{formatJsonValue(value)}</strong>
-    </div>
+      <input value={value} onChange={(event) => onChange(event.target.value)} />
+    </label>
+  );
+}
+
+function RuleSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="rule-datum">
+      <span>{label}</span>
+      <select value={value} onChange={(event) => onChange(event.target.value)}>
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
   );
 }
 
@@ -1987,6 +2287,20 @@ function formatJsonValue(value: JsonValue) {
   return JSON.stringify(value);
 }
 
+function parseJsonLikeValue(value: string): JsonValue {
+  const trimmed = value.trim();
+
+  if (trimmed.length === 0) {
+    return "";
+  }
+
+  try {
+    return JSON.parse(trimmed) as JsonValue;
+  } catch {
+    return value;
+  }
+}
+
 function ruleActionSchema(schema: SchemaSpec): Extract<SchemaSpec, { kind: "tagged_union" }> | null {
   if (schema.kind !== "array" || schema.item.kind !== "object") {
     return null;
@@ -1998,6 +2312,94 @@ function ruleActionSchema(schema: SchemaSpec): Extract<SchemaSpec, { kind: "tagg
   }
 
   return null;
+}
+
+function defaultActionForVariant(schema: Extract<SchemaSpec, { kind: "tagged_union" }>, tagValue: string) {
+  const variant = schema.variants.find((candidate) => candidate.tag_value === tagValue);
+  const action: { [key: string]: JsonValue } = { [schema.tag]: tagValue };
+
+  variant?.fields.forEach((field) => {
+    action[field.key] = defaultValueForField(field);
+  });
+
+  return action;
+}
+
+function defaultRule(actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null): JsonValue {
+  return {
+    condition: {
+      field_path: "",
+      operation: "equals",
+      value: "",
+    },
+    actions: actionSchema ? [defaultActionForVariant(actionSchema, actionSchema.variants[0]?.tag_value ?? "")] : [],
+    else_actions: [],
+  };
+}
+
+function moveArrayItem<T>(items: T[], index: number, direction: -1 | 1) {
+  const nextIndex = index + direction;
+
+  if (nextIndex < 0 || nextIndex >= items.length) {
+    return items;
+  }
+
+  const nextItems = [...items];
+  const [item] = nextItems.splice(index, 1);
+  nextItems.splice(nextIndex, 0, item);
+
+  return nextItems;
+}
+
+function defaultValueForField(field: FieldSpec): JsonValue {
+  if (field.default_value !== null) {
+    return parseJsonLikeValue(field.default_value);
+  }
+
+  if (field.kind === "boolean") {
+    return false;
+  }
+
+  if (field.kind === "integer" || field.kind === "number") {
+    return 0;
+  }
+
+  if (field.kind === "array") {
+    return [];
+  }
+
+  if (field.kind === "object") {
+    return {};
+  }
+
+  if (field.kind === "enum") {
+    return field.options[0] ?? "";
+  }
+
+  return "";
+}
+
+function setObjectValue(
+  value: { [key: string]: JsonValue },
+  path: string[],
+  nextValue: JsonValue,
+): { [key: string]: JsonValue } {
+  if (path.length === 0) {
+    return value;
+  }
+
+  const [head, ...tail] = path;
+
+  if (tail.length === 0) {
+    return { ...value, [head]: nextValue };
+  }
+
+  const child = isJsonObject(value[head]) ? value[head] : {};
+
+  return {
+    ...value,
+    [head]: setObjectValue(child, tail, nextValue),
+  };
 }
 
 function ruleSummary(condition: { [key: string]: JsonValue }, actionCount: number, elseActionCount: number) {

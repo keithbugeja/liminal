@@ -44,6 +44,33 @@ fn update_node_parameter(
 }
 
 #[tauri::command]
+fn update_node_parameter_json(
+    path: String,
+    node_id: String,
+    parameter_key: String,
+    value_json: String,
+) -> Result<ResolvedPipelineGraph, String> {
+    let resolved_path = resolve_config_path(&path)?;
+    let value = serde_json::from_str::<serde_json::Value>(&value_json)
+        .map_err(|error| format!("Failed to parse parameter JSON: {}", error))?;
+    let content = fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))?;
+    let mut document = content
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
+
+    update_json_parameter(&mut document, &node_id, &parameter_key, &value)?;
+    let next_content = document.to_string();
+    let config = toml::from_str(&next_content)
+        .map_err(|error| format!("Edited TOML no longer parses: {}", error))?;
+
+    fs::write(&resolved_path, next_content)
+        .map_err(|error| format!("Failed to write '{}': {}", resolved_path.display(), error))?;
+
+    Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+#[tauri::command]
 fn update_node_field(
     path: String,
     node_id: String,
@@ -156,6 +183,79 @@ fn update_existing_parameter(
             "Node '{}' parameters are not editable as a table",
             node_id
         ))
+    }
+}
+
+fn update_json_parameter(
+    document: &mut DocumentMut,
+    node_id: &str,
+    parameter_key: &str,
+    value: &serde_json::Value,
+) -> Result<(), String> {
+    let stage = stage_item_mut(document, node_id)?;
+
+    if stage.get("parameters").is_none() {
+        stage["parameters"] = toml_edit::value(toml_edit::InlineTable::new());
+    }
+
+    let parameters = stage
+        .get_mut("parameters")
+        .ok_or_else(|| format!("Node '{}' has no editable parameters table", node_id))?;
+    let next_item = toml_item_from_json(value)?;
+
+    if let Some(table) = parameters.as_table_mut() {
+        table[parameter_key] = next_item;
+        Ok(())
+    } else if let Some(inline_table) = parameters.as_inline_table_mut() {
+        let next_value = next_item
+            .into_value()
+            .map_err(|_| "Inline parameters cannot store this nested value".to_string())?;
+        inline_table.insert(parameter_key, next_value);
+        Ok(())
+    } else {
+        Err(format!(
+            "Node '{}' parameters are not editable as a table",
+            node_id
+        ))
+    }
+}
+
+fn toml_item_from_json(value: &serde_json::Value) -> Result<Item, String> {
+    let snippet = format!("value = {}", toml_literal_from_json(value)?);
+    let mut document = snippet
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to convert JSON parameter to TOML: {}", error))?;
+
+    Ok(document.remove("value").unwrap_or(Item::None))
+}
+
+fn toml_literal_from_json(value: &serde_json::Value) -> Result<String, String> {
+    match value {
+        serde_json::Value::Null => Err("TOML parameters cannot be null".to_string()),
+        serde_json::Value::Bool(value) => Ok(value.to_string()),
+        serde_json::Value::Number(value) => Ok(value.to_string()),
+        serde_json::Value::String(value) => Ok(Value::from(value.as_str()).to_string()),
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(toml_literal_from_json)
+            .collect::<Result<Vec<_>, _>>()
+            .map(|values| format!("[{}]", values.join(", "))),
+        serde_json::Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| Ok(format!("{} = {}", toml_key(key), toml_literal_from_json(value)?)))
+            .collect::<Result<Vec<_>, String>>()
+            .map(|fields| format!("{{ {} }}", fields.join(", "))),
+    }
+}
+
+fn toml_key(key: &str) -> String {
+    if key
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+    {
+        key.to_string()
+    } else {
+        Value::from(key).to_string()
     }
 }
 
@@ -424,6 +524,7 @@ fn main() {
             list_example_configs,
             list_processor_descriptors,
             update_node_field,
+            update_node_parameter_json,
             update_node_parameter
         ])
         .run(tauri::generate_context!())
@@ -705,6 +806,58 @@ actions = [{ type = "pass_through" }]
                 .expect_err("nested parameter edits are rejected");
 
         assert!(error.contains("Nested parameters are read-only"));
+    }
+
+    #[test]
+    fn updates_nested_rules_parameter_from_json() {
+        let mut document = parse_document(
+            r#"
+[pipelines.rules]
+description = "Rule pipeline"
+
+[pipelines.rules.stages.filter]
+type = "rule"
+inputs = ["raw_data"]
+output = "filtered_data"
+
+[[pipelines.rules.stages.filter.parameters.rules]]
+condition = { field_path = "device_id", operation = "startswith", value = "esp32" }
+actions = [{ type = "pass_through" }]
+"#,
+        );
+        let value = serde_json::json!([
+            {
+                "condition": { "field_path": "temperature", "operation": ">", "value": 15 },
+                "actions": [
+                    { "type": "set_field", "field_path": "state", "value": true }
+                ],
+                "else_actions": [
+                    { "type": "set_field", "field_path": "state", "value": false }
+                ]
+            }
+        ]);
+
+        update_json_parameter(
+            &mut document,
+            "pipeline:rules.stage:filter",
+            "rules",
+            &value,
+        )
+        .expect("nested rule update succeeds");
+
+        let edited = document.to_string();
+        let parsed: serde_json::Value = toml::from_str::<toml::Value>(&edited)
+            .expect("edited TOML parses")
+            .try_into()
+            .expect("edited TOML converts to JSON");
+
+        assert!(edited.contains("temperature"));
+        assert!(edited.contains("set_field"));
+        assert_eq!(
+            parsed["pipelines"]["rules"]["stages"]["filter"]["parameters"]["rules"][0]
+                ["condition"]["field_path"],
+            "temperature"
+        );
     }
 
     #[test]

@@ -572,11 +572,38 @@ button {
   white-space: pre-wrap;
 }
 
-.rule-preview {
+.rule-editor {
   display: flex;
   min-width: 0;
   flex-direction: column;
   gap: 10px;
+}
+
+.rule-editor-toolbar {
+  display: flex;
+  min-width: 0;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.rule-editor-toolbar button,
+.rule-button-group button,
+.rule-action-section-header button {
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid #326b61;
+  border-radius: 6px;
+  color: #bdf7ef;
+  font-size: 11px;
+  font-weight: 900;
+  background: #132325;
+}
+
+.rule-editor-toolbar button:disabled,
+.rule-button-group button:disabled,
+.rule-action-section-header button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
 }
 
 .rule-card {
@@ -600,6 +627,27 @@ button {
   gap: 10px;
 }
 
+.rule-card-header {
+  flex-wrap: wrap;
+}
+
+.rule-card-header > strong {
+  margin-left: auto;
+}
+
+.rule-button-group {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+
+.rule-button-group button,
+.rule-action-section-header button {
+  height: 25px;
+  padding: 0 7px;
+  font-size: 10px;
+}
+
 .rule-card-header span,
 .rule-action-section-header span,
 .rule-action-title span,
@@ -612,8 +660,7 @@ button {
 }
 
 .rule-card-header strong,
-.rule-action-title strong,
-.rule-datum strong {
+.rule-action-title strong {
   min-width: 0;
   overflow: hidden;
   color: #edf8f5;
@@ -653,8 +700,38 @@ button {
   background: #10191b;
 }
 
-.rule-datum strong {
+.rule-datum input,
+.rule-datum select,
+.rule-action-title select {
+  width: 100%;
+  min-width: 0;
+  height: 30px;
+  padding: 5px 7px;
+  border: 1px solid #263438;
+  border-radius: 5px;
   color: #f3fbf9;
+  background: #0b1214;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.rule-datum input:focus,
+.rule-datum select:focus,
+.rule-action-title select:focus {
+  border-color: #5acdc0;
+  outline: 0;
+  box-shadow: 0 0 0 1px rgba(90, 205, 192, 0.24);
+}
+
+.rule-checkbox {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.rule-checkbox input {
+  width: 16px;
+  height: 16px;
+  accent-color: #67e5d8;
 }
 
 .rule-action-section {
@@ -673,7 +750,7 @@ button {
 
 .rule-action-card {
   display: grid;
-  grid-template-columns: minmax(120px, 0.36fr) minmax(0, 1fr);
+  grid-template-columns: minmax(150px, 0.34fr) minmax(0, 1fr);
   align-items: start;
   min-width: 0;
   gap: 10px;
@@ -689,6 +766,10 @@ button {
   flex-direction: column;
   align-items: flex-start;
   justify-content: flex-start;
+}
+
+.rule-action-title .rule-button-group {
+  flex-wrap: wrap;
 }
 
 .rule-action-fields {
