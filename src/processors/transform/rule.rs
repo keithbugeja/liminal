@@ -53,7 +53,7 @@ impl ProcessorConfig for RuleConfig {
         Ok(Self {
             rules,
             error_strategy,
-            timing : timing_config,
+            timing: timing_config,
         })
     }
     fn validate(&self) -> Result<()> {
@@ -386,7 +386,7 @@ impl RuleProcessor {
                     "Action {:?} failed: {} (using default behavior)",
                     action, error
                 );
-                // |KB|Todo: For now, this is the same as Continue, but could 
+                // |KB|Todo: For now, this is the same as Continue, but could
                 // be enhanced to provide default values for specific action types
                 Ok(())
             }

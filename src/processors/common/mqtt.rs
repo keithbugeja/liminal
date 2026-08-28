@@ -20,7 +20,11 @@ impl MqttConnectionConfig {
         parameters: &Option<HashMap<String, serde_json::Value>>,
         _default_client_prefix: &str,
     ) -> Self {
-        let broker_url = extract_param(parameters, "broker_url", "mqtt://localhost:1883".to_string());
+        let broker_url = extract_param(
+            parameters,
+            "broker_url",
+            "mqtt://localhost:1883".to_string(),
+        );
         let client_id = extract_param(parameters, "client_id", None);
         let qos = extract_param(parameters, "qos", 0);
         let clean_session = extract_param(parameters, "clean_session", true);
@@ -51,11 +55,16 @@ impl MqttConnectionConfig {
     /// Parse broker URL into host and port
     pub fn parse_broker_url(&self) -> Result<(String, u16)> {
         let url = &self.broker_url;
-        let clean_url = if url.starts_with("mqtt://") { &url[7..] } else { url };
+        let clean_url = if url.starts_with("mqtt://") {
+            &url[7..]
+        } else {
+            url
+        };
 
         if let Some(colon_pos) = clean_url.find(':') {
             let host = clean_url[..colon_pos].to_string();
-            let port = clean_url[colon_pos + 1..].parse::<u16>()
+            let port = clean_url[colon_pos + 1..]
+                .parse::<u16>()
                 .map_err(|_| anyhow::anyhow!("Invalid port in broker URL: {}", url))?;
             Ok((host, port))
         } else {

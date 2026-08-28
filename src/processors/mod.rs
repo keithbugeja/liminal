@@ -1,11 +1,11 @@
-pub mod processor;
-pub mod factory;
 pub mod common;
+pub mod factory;
+pub mod processor;
 
+pub mod aggregator;
 pub mod input;
 pub mod output;
 pub mod transform;
-pub mod aggregator;
 
 pub use processor::Processor;
 // pub use input::*;

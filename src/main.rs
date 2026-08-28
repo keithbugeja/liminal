@@ -13,8 +13,8 @@ mod processors;
 #[command(author = "Keith Bugeja <keith.bugeja@um.edu.mt>")]
 #[command(version = "0.2.0")]
 #[command(about = "Liminal: A Zero-Code Stream Processing Engine for Sensor Data")]
-#[command(long_about =
-"------------------------------------------------------------
+#[command(
+    long_about = "------------------------------------------------------------
     ██╗     ██╗███╗   ███╗██╗███╗   ██╗ █████╗ ██╗     
     ██║     ██║████╗ ████║██║████╗  ██║██╔══██╗██║     
     ██║     ██║██╔████╔██║██║██╔██╗ ██║███████║██║     
@@ -24,7 +24,8 @@ mod processors;
 
     Stream processing engine for sensor data. Build real-
     time pipelines using TOML configuration files.
-------------------------------------------------------------")]
+------------------------------------------------------------"
+)]
 struct Cli {
     /// Configuration file path
     #[arg(short, long, default_value = "./config/config.toml")]
@@ -37,6 +38,10 @@ struct Cli {
     /// List available processor types
     #[arg(short = 'L', long)]
     list_processors: bool,
+
+    /// Print the resolved pipeline graph as JSON and exit
+    #[arg(long)]
+    graph_json: bool,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
@@ -65,6 +70,18 @@ async fn main() {
             std::process::exit(1);
         }
     };
+
+    if cli.graph_json {
+        let graph = config::ResolvedPipelineGraph::from_config(&config);
+        match serde_json::to_string_pretty(&graph) {
+            Ok(json) => println!("{}", json),
+            Err(e) => {
+                tracing::error!("Failed to serialise graph JSON: {}", e);
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     // Validate configuration
     if let Err(e) = config::validate_config(&config) {

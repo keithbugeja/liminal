@@ -1,7 +1,7 @@
 use super::channel::PubSubChannel;
 use super::channel::Subscriber;
-use super::message::Message;
 use super::context::ProcessingContext;
+use super::message::Message;
 
 use crate::config::StageConfig;
 use crate::processors::processor::Processor;
@@ -20,7 +20,7 @@ use std::sync::Arc;
 pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
     // Uncomment if the stage name is used as processor type
     // if let Ok(processor) = crate::processors::create_processor(name, config) {
-    
+
     if let Ok(processor) = crate::processors::create_processor(&config.r#type.clone(), config) {
         Some(Box::new(Stage::new(name.to_string(), processor, None)))
     } else {

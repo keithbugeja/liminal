@@ -11,11 +11,11 @@ pub trait Processor: Send + Sync {
     async fn init(&mut self) -> anyhow::Result<()>;
 
     /// Processes messages from the input channels and sends them to the output channel.
-    /// 
+    ///
     /// # Arguments
     /// * `context` - A mutable reference to the processing context, which contains information
     ///   about the input and output channels.
-    /// 
+    ///
     /// # Returns
     /// A result indicating success or failure of the processing.
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()>;

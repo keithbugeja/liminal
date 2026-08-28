@@ -118,7 +118,11 @@ impl PipelineManager {
                 channel_config.capacity,
             );
 
-            stage.lock().await.add_output(&output_name, channel.clone()).await;
+            stage
+                .lock()
+                .await
+                .add_output(&output_name, channel.clone())
+                .await;
         }
 
         Ok(())
@@ -213,10 +217,10 @@ impl PipelineManager {
 
         for (stage_name, stage_config) in stage_configs {
             println!("{} => {:?}", stage_name, stage_config);
-            
+
             // Use the type as name of the stage
-            // if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {            
-            
+            // if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {
+
             if let Some(stage) = create_stage(&stage_name, stage_config.clone()) {
                 stages.insert(stage_name.clone(), Arc::new(Mutex::new(stage)));
             } else {

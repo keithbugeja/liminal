@@ -49,7 +49,7 @@ where
             Subscriber::Mpsc(rx) => match rx.try_recv() {
                 Ok(msg) => Some(msg),
                 _ => None,
-            }
+            },
             Subscriber::Broadcast(rx) => match rx.try_recv() {
                 Ok(msg) => Some(msg),
                 _ => None,
@@ -57,11 +57,11 @@ where
             Subscriber::Flume(rx) => match rx.try_recv() {
                 Ok(msg) => Some(msg),
                 _ => None,
-            }
+            },
             Subscriber::Fanout(rx) => match rx.try_recv() {
                 Ok(msg) => Some(msg),
                 _ => None,
-            }
+            },
         }
     }
 }
@@ -179,7 +179,7 @@ where
 /// Fanout channel / reliable fan-out channel (at-least-once)
 pub struct FanoutChannel<M> {
     capacity: usize,
-    senders: std::sync::Mutex<Vec<mpsc::Sender<M>>>//tokio::sync::Mutex<Vec<mpsc::Sender<M>>>,
+    senders: std::sync::Mutex<Vec<mpsc::Sender<M>>>, //tokio::sync::Mutex<Vec<mpsc::Sender<M>>>,
 }
 
 impl<M> FanoutChannel<M> {
@@ -217,10 +217,10 @@ where
         if failed_count > 0 {
             let mut guard = self.senders.lock().unwrap();
             guard.retain(|sender| !sender.is_closed());
-            
+
             if failed_count == total_count && total_count > 0 {
                 return Err(PublishError::FanoutError(
-                    mpsc::error::SendError(msg) // Return the original message
+                    mpsc::error::SendError(msg), // Return the original message
                 ));
             }
         }
@@ -237,7 +237,7 @@ where
             let mut guard = self.senders.lock().unwrap();
             guard.push(sender);
         }
-        
+
         Subscriber::Fanout(receiver)
     }
 }
