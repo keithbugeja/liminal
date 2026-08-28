@@ -1,4 +1,5 @@
 use liminal::config::{load_config, ResolvedPipelineGraph};
+use liminal::processors::descriptor::{processor_descriptors, ProcessorDescriptor};
 use std::fs;
 use std::path::{Path, PathBuf};
 use toml_edit::{DocumentMut, Item, Value};
@@ -85,6 +86,11 @@ fn list_example_configs() -> Result<Vec<String>, String> {
 
     configs.sort();
     Ok(configs)
+}
+
+#[tauri::command]
+fn list_processor_descriptors() -> Vec<ProcessorDescriptor> {
+    processor_descriptors()
 }
 
 fn resolve_config_path(path: &str) -> Result<PathBuf, String> {
@@ -416,6 +422,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             load_graph,
             list_example_configs,
+            list_processor_descriptors,
             update_node_field,
             update_node_parameter
         ])

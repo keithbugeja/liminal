@@ -32,7 +32,7 @@ import {
   RefreshCw,
   Search,
 } from "lucide-react";
-import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
 type GraphNodeKind = "input" | "pipeline_stage" | "output";
 type GraphLane = "inputs" | "pipeline_stages" | "outputs";
@@ -77,6 +77,7 @@ type GraphNode = {
 type GraphParameter = {
   key: string;
   value: string;
+  raw_value: JsonValue;
   value_kind: string;
   editable: boolean;
 };
@@ -103,6 +104,42 @@ type GraphDiagnostic = {
   message: string;
   channel_name: string | null;
   node_ids: string[];
+};
+
+type ProcessorCategory = "input" | "transform" | "aggregator" | "output";
+type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
+type FieldKind = "string" | "integer" | "number" | "boolean" | "enum" | "array" | "object" | "json_value";
+
+type SchemaSpec =
+  | { kind: "object"; fields: FieldSpec[] }
+  | { kind: "array"; item: SchemaSpec }
+  | { kind: "tagged_union"; tag: string; variants: TaggedVariantSpec[] }
+  | { kind: "json_value" };
+
+type TaggedVariantSpec = {
+  tag_value: string;
+  label: string;
+  fields: FieldSpec[];
+};
+
+type FieldSpec = {
+  key: string;
+  label: string;
+  kind: FieldKind;
+  required: boolean;
+  default_value: string | null;
+  options: string[];
+  help: string;
+  schema: SchemaSpec | null;
+  renderer: string | null;
+};
+
+type ProcessorDescriptor = {
+  type_name: string;
+  category: ProcessorCategory;
+  display_name: string;
+  description: string;
+  fields: FieldSpec[];
 };
 
 type FlowNodeData = {
@@ -133,6 +170,10 @@ const laneTitle: Record<GraphLane, string> = {
 const initialConfigPath = "config/examples/config_rule_filter.toml";
 const laneTop = 24;
 const nodeGap = 96;
+const defaultInspectorWidth = 520;
+const minInspectorWidth = 330;
+const maxInspectorWidth = 980;
+const inspectorWidthStorageKey = "liminal.inspectorWidth";
 const nodeTypes = { liminalNode: LiminalNode };
 const edgeTypes = { channelEdge: ChannelEdge };
 const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "#78d879"];
@@ -140,6 +181,7 @@ const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "
 function App() {
   const [configPath, setConfigPath] = useState(initialConfigPath);
   const [exampleConfigs, setExampleConfigs] = useState<string[]>([]);
+  const [processorDescriptors, setProcessorDescriptors] = useState<ProcessorDescriptor[]>([]);
   const [graph, setGraph] = useState<ResolvedPipelineGraph | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedChannelName, setSelectedChannelName] = useState<string | null>(null);
@@ -149,6 +191,7 @@ function App() {
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [inspectorWidth, setInspectorWidth] = useState(readStoredInspectorWidth);
 
   const loadGraph = useCallback(async (path: string) => {
     setLoadState("loading");
@@ -177,6 +220,9 @@ function App() {
     invoke<string[]>("list_example_configs")
       .then(setExampleConfigs)
       .catch(() => setExampleConfigs([]));
+    invoke<ProcessorDescriptor[]>("list_processor_descriptors")
+      .then(setProcessorDescriptors)
+      .catch(() => setProcessorDescriptors([]));
     loadGraph(initialConfigPath);
   }, [loadGraph]);
   const selectNode = useCallback((id: string | null) => {
@@ -272,10 +318,40 @@ function App() {
     },
     [configPath],
   );
+  const startInspectorResize = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+
+      const startX = event.clientX;
+      const startWidth = inspectorWidth;
+
+      document.body.classList.add("resizing-inspector");
+
+      const resize = (moveEvent: MouseEvent) => {
+        setInspectorWidth(clampInspectorWidth(startWidth + startX - moveEvent.clientX));
+      };
+      const stopResize = () => {
+        document.body.classList.remove("resizing-inspector");
+        window.removeEventListener("mousemove", resize);
+        window.removeEventListener("mouseup", stopResize);
+      };
+
+      window.addEventListener("mousemove", resize);
+      window.addEventListener("mouseup", stopResize);
+    },
+    [inspectorWidth],
+  );
+
+  useEffect(() => {
+    window.localStorage.setItem(inspectorWidthStorageKey, String(inspectorWidth));
+  }, [inspectorWidth]);
 
   return (
     <ReactFlowProvider>
-      <div className="app-shell">
+      <div
+        className="app-shell"
+        style={{ gridTemplateColumns: `340px minmax(0, 1fr) 8px ${inspectorWidth}px` }}
+      >
         <aside className="sidebar">
           <div className="brand-block">
             <div className="brand-mark">
@@ -365,9 +441,20 @@ function App() {
           />
         </main>
 
+        <div
+          className="inspector-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize inspector"
+          title="Resize inspector"
+          onMouseDown={startInspectorResize}
+          onDoubleClick={() => setInspectorWidth(defaultInspectorWidth)}
+        />
+
         <InspectorPanel
           graph={graph}
           configPath={configPath}
+          processorDescriptors={processorDescriptors}
           selectedNodeId={selectedNodeId}
           selectedChannelName={selectedChannelName}
           selectedDiagnosticKey={selectedDiagnosticKey}
@@ -525,6 +612,7 @@ function DiagnosticsPanel({
 function InspectorPanel({
   graph,
   configPath,
+  processorDescriptors,
   selectedNodeId,
   selectedChannelName,
   selectedDiagnosticKey,
@@ -536,6 +624,7 @@ function InspectorPanel({
 }: {
   graph: ResolvedPipelineGraph | null;
   configPath: string;
+  processorDescriptors: ProcessorDescriptor[];
   selectedNodeId: string | null;
   selectedChannelName: string | null;
   selectedDiagnosticKey: string | null;
@@ -602,6 +691,7 @@ function InspectorPanel({
           node={selectedNode}
           configPath={configPath}
           graph={graph}
+          processorDescriptors={processorDescriptors}
           diagnostics={nodeDiagnostics}
           selectedDiagnostic={selectedDiagnostic}
           onSelectChannel={selectChannel}
@@ -623,6 +713,7 @@ function NodeInspector({
   node,
   configPath,
   graph,
+  processorDescriptors,
   diagnostics,
   selectedDiagnostic,
   onSelectChannel,
@@ -633,6 +724,7 @@ function NodeInspector({
   node: GraphNode;
   configPath: string;
   graph: ResolvedPipelineGraph;
+  processorDescriptors: ProcessorDescriptor[];
   diagnostics: GraphDiagnostic[];
   selectedDiagnostic: GraphDiagnostic | null;
   onSelectChannel: (channelName: string | null) => void;
@@ -645,12 +737,22 @@ function NodeInspector({
   const outputChannel = node.output_channel
     ? graph.channels.find((channel) => channel.name === node.output_channel) ?? null
     : null;
+  const processorDescriptor =
+    processorDescriptors.find((descriptor) => descriptor.type_name === node.processor_type) ?? null;
+  const knownParameterCount = processorDescriptor?.fields.length ?? 0;
+  const parameterFields = processorDescriptor?.fields ?? [];
+  const missingParameterFields = parameterFields.filter(
+    (field) => !node.parameters.some((parameter) => parameter.key === field.key),
+  );
 
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow={node.processor_type} title={node.display_name} />
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
       <InspectorSection title="Overview" defaultOpen>
+        {processorDescriptor && (
+          <DescriptorSummary descriptor={processorDescriptor} configuredCount={node.parameters.length} />
+        )}
         <KeyValue label="Kind" value={node.kind} />
         <KeyValue label="Config path" value={node.config_path} />
         <KeyValue label="File" value={configPath} />
@@ -769,8 +871,11 @@ function NodeInspector({
         </div>
       </InspectorSection>
 
-      <InspectorSection title="Parameters" badge={String(node.parameters.length)}>
-        {node.parameters.length === 0 ? (
+      <InspectorSection
+        title="Parameters"
+        badge={String(Math.max(node.parameters.length, knownParameterCount))}
+      >
+        {node.parameters.length === 0 && missingParameterFields.length === 0 ? (
           <p className="empty-state">No processor parameters.</p>
         ) : (
           <div className="parameter-list">
@@ -779,9 +884,13 @@ function NodeInspector({
                 key={parameter.key}
                 nodeId={node.id}
                 parameter={parameter}
+                fieldSpec={parameterFields.find((field) => field.key === parameter.key)}
                 saveState={saveState}
                 onUpdateParameter={onUpdateParameter}
               />
+            ))}
+            {missingParameterFields.map((field) => (
+              <MissingParameterRow key={field.key} field={field} />
             ))}
           </div>
         )}
@@ -795,16 +904,22 @@ function NodeInspector({
 function ParameterRow({
   nodeId,
   parameter,
+  fieldSpec,
   saveState,
   onUpdateParameter,
 }: {
   nodeId: string;
   parameter: GraphParameter;
+  fieldSpec?: FieldSpec;
   saveState: "idle" | "saving" | "error";
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
 }) {
   const [draftValue, setDraftValue] = useState(parameter.value);
   const isDirty = draftValue !== parameter.value;
+  const label = fieldSpec?.label ?? parameter.key;
+  const fieldKind = editableKindForParameter(parameter, fieldSpec);
+  const valueKind = fieldSpec?.kind ?? parameter.value_kind;
+  const options = fieldSpec ? selectOptionsForValue(fieldSpec, draftValue) : [];
 
   useEffect(() => {
     setDraftValue(parameter.value);
@@ -814,10 +929,17 @@ function ParameterRow({
     return (
       <div className="parameter-row read-only">
         <div className="parameter-label">
-          <strong>{parameter.key}</strong>
-          <span>{parameter.value_kind}</span>
+          <strong title={parameter.key}>{label}</strong>
+          <span>{valueKind}</span>
         </div>
-        <pre>{parameter.value}</pre>
+        {fieldSpec?.help && <p className="parameter-help">{fieldSpec.help}</p>}
+        {fieldSpec?.renderer === "rule_builder" && fieldSpec.schema ? (
+          <RuleParameterPreview value={parameter.raw_value} schema={fieldSpec.schema} />
+        ) : fieldSpec?.schema ? (
+          <NestedParameterPreview value={parameter.raw_value} schema={fieldSpec.schema} />
+        ) : (
+          <pre>{parameter.value}</pre>
+        )}
       </div>
     );
   }
@@ -825,10 +947,19 @@ function ParameterRow({
   return (
     <div className="parameter-row">
       <div className="parameter-label">
-        <strong>{parameter.key}</strong>
-        <span>{parameter.value_kind}</span>
+        <strong title={parameter.key}>{label}</strong>
+        <span>{valueKind}</span>
       </div>
-      {parameter.value_kind === "boolean" ? (
+      {fieldSpec?.help && <p className="parameter-help">{fieldSpec.help}</p>}
+      {fieldKind === "enum" ? (
+        <select value={draftValue} onChange={(event) => setDraftValue(event.target.value)}>
+          {options.map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      ) : fieldKind === "boolean" ? (
         <label className="parameter-toggle">
           <input
             type="checkbox"
@@ -840,7 +971,7 @@ function ParameterRow({
       ) : (
         <input
           value={draftValue}
-          type={parameter.value_kind === "number" ? "number" : "text"}
+          type={fieldKind === "number" ? "number" : "text"}
           onChange={(event) => setDraftValue(event.target.value)}
         />
       )}
@@ -850,6 +981,285 @@ function ParameterRow({
       >
         {saveState === "saving" ? "Saving" : "Save"}
       </button>
+    </div>
+  );
+}
+
+function MissingParameterRow({ field }: { field: FieldSpec }) {
+  return (
+    <div className="parameter-row read-only missing-parameter">
+      <div className="parameter-label">
+        <strong title={field.key}>{field.label}</strong>
+        <span>{field.kind}</span>
+      </div>
+      {field.help && <p className="parameter-help">{field.help}</p>}
+      <div className="parameter-default">
+        <span>{field.required ? "required" : "default"}</span>
+        <strong>{field.default_value ?? "not set"}</strong>
+      </div>
+    </div>
+  );
+}
+
+function RuleParameterPreview({
+  value,
+  schema,
+}: {
+  value: JsonValue;
+  schema: SchemaSpec;
+}) {
+  const rules = Array.isArray(value) ? value : [];
+  const actionSchema = ruleActionSchema(schema);
+
+  return (
+    <div className="rule-preview">
+      {rules.length === 0 ? (
+        <p className="empty-state">No rules configured.</p>
+      ) : (
+        rules.map((rule, index) => (
+          <RuleCard key={index} rule={rule} index={index} actionSchema={actionSchema} />
+        ))
+      )}
+    </div>
+  );
+}
+
+function RuleCard({
+  rule,
+  index,
+  actionSchema,
+}: {
+  rule: JsonValue;
+  index: number;
+  actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+}) {
+  const ruleObject = isJsonObject(rule) ? rule : {};
+  const condition = isJsonObject(ruleObject.condition) ? ruleObject.condition : {};
+  const actions = Array.isArray(ruleObject.actions) ? ruleObject.actions : [];
+  const elseActions = Array.isArray(ruleObject.else_actions) ? ruleObject.else_actions : [];
+
+  return (
+    <div className="rule-card">
+      <div className="rule-card-header">
+        <span>Rule {index + 1}</span>
+        <strong>{ruleSummary(condition, actions.length, elseActions.length)}</strong>
+      </div>
+
+      <div className="rule-condition">
+        <RuleDatum label="Field" value={condition.field_path ?? null} />
+        <RuleDatum label="Operation" value={condition.operation ?? null} />
+        <RuleDatum label="Value" value={condition.value ?? null} />
+      </div>
+
+      <RuleActionList title="Actions" actions={actions} actionSchema={actionSchema} />
+      <RuleActionList title="Else Actions" actions={elseActions} actionSchema={actionSchema} />
+    </div>
+  );
+}
+
+function RuleActionList({
+  title,
+  actions,
+  actionSchema,
+}: {
+  title: string;
+  actions: JsonValue[];
+  actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+}) {
+  return (
+    <div className="rule-action-section">
+      <div className="rule-action-section-header">
+        <span>{title}</span>
+        <strong>{actions.length}</strong>
+      </div>
+      {actions.length === 0 ? (
+        <p className="empty-state">None.</p>
+      ) : (
+        <div className="rule-action-list">
+          {actions.map((action, index) => (
+            <RuleActionCard key={index} action={action} index={index} actionSchema={actionSchema} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function RuleActionCard({
+  action,
+  index,
+  actionSchema,
+}: {
+  action: JsonValue;
+  index: number;
+  actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+}) {
+  const actionObject = isJsonObject(action) ? action : {};
+  const type = typeof actionObject.type === "string" ? actionObject.type : "";
+  const variant = actionSchema?.variants.find((candidate) => candidate.tag_value === type);
+  const fields = variant?.fields ?? Object.keys(actionObject)
+    .filter((key) => key !== "type")
+    .map((key) => ({
+      key,
+      label: labelFromKey(key),
+      kind: "json_value" as FieldKind,
+      required: false,
+      default_value: null,
+      options: [],
+      help: "",
+      schema: null,
+      renderer: null,
+    }));
+
+  return (
+    <div className="rule-action-card">
+      <div className="rule-action-title">
+        <span>Action {index + 1}</span>
+        <strong>{variant?.label ?? labelFromKey(type || "action")}</strong>
+      </div>
+      <div className="rule-action-fields">
+        {fields.map((field) => (
+          <RuleDatum key={field.key} label={field.label} value={actionObject[field.key] ?? null} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function RuleDatum({ label, value }: { label: string; value: JsonValue }) {
+  return (
+    <div className="rule-datum">
+      <span>{label}</span>
+      <strong title={formatJsonValue(value)}>{formatJsonValue(value)}</strong>
+    </div>
+  );
+}
+
+function NestedParameterPreview({
+  value,
+  schema,
+}: {
+  value: JsonValue;
+  schema: SchemaSpec;
+}) {
+  if (schema.kind === "array") {
+    const items = Array.isArray(value) ? value : [];
+
+    return (
+      <div className="nested-preview">
+        {items.length === 0 ? (
+          <p className="empty-state">Empty array.</p>
+        ) : (
+          items.map((item, index) => (
+            <NestedItem key={index} title={`Item ${index + 1}`} value={item} schema={schema.item} />
+          ))
+        )}
+      </div>
+    );
+  }
+
+  if (schema.kind === "object") {
+    return <NestedObject value={value} fields={schema.fields} />;
+  }
+
+  if (schema.kind === "tagged_union") {
+    return <NestedTaggedUnion value={value} schema={schema} />;
+  }
+
+  return <pre>{formatJsonValue(value)}</pre>;
+}
+
+function NestedItem({
+  title,
+  value,
+  schema,
+}: {
+  title: string;
+  value: JsonValue;
+  schema: SchemaSpec;
+}) {
+  return (
+    <div className="nested-item">
+      <div className="nested-item-title">
+        <span>{title}</span>
+        <strong>{summarizeNestedValue(value, schema)}</strong>
+      </div>
+      <NestedParameterPreview value={value} schema={schema} />
+    </div>
+  );
+}
+
+function NestedObject({ value, fields }: { value: JsonValue; fields: FieldSpec[] }) {
+  const objectValue = isJsonObject(value) ? value : {};
+
+  return (
+    <div className="nested-object">
+      {fields.map((field) => {
+        const childValue = objectValue[field.key] ?? null;
+
+        return (
+          <div className="nested-field" key={field.key}>
+            <span>{field.label}</span>
+            {field.schema ? (
+              <NestedParameterPreview value={childValue} schema={field.schema} />
+            ) : (
+              <strong>{formatJsonValue(childValue)}</strong>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function NestedTaggedUnion({
+  value,
+  schema,
+}: {
+  value: JsonValue;
+  schema: Extract<SchemaSpec, { kind: "tagged_union" }>;
+}) {
+  const objectValue = isJsonObject(value) ? value : {};
+  const tagValue = objectValue[schema.tag];
+  const variant = schema.variants.find((candidate) => candidate.tag_value === tagValue);
+
+  return (
+    <div className="nested-object tagged-union">
+      <div className="nested-field">
+        <span>{schema.tag}</span>
+        <strong>{variant?.label ?? formatJsonValue(tagValue)}</strong>
+      </div>
+      {(variant?.fields ?? []).map((field) => (
+        <div className="nested-field" key={field.key}>
+          <span>{field.label}</span>
+          {field.schema ? (
+            <NestedParameterPreview value={objectValue[field.key] ?? null} schema={field.schema} />
+          ) : (
+            <strong>{formatJsonValue(objectValue[field.key] ?? null)}</strong>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function DescriptorSummary({
+  descriptor,
+  configuredCount,
+}: {
+  descriptor: ProcessorDescriptor;
+  configuredCount: number;
+}) {
+  return (
+    <div className="descriptor-summary">
+      <div>
+        <strong>{descriptor.display_name}</strong>
+        <span>{descriptor.category}</span>
+      </div>
+      <p>{descriptor.description}</p>
+      <small>
+        {configuredCount}/{descriptor.fields.length} parameters configured
+      </small>
     </div>
   );
 }
@@ -1522,6 +1932,119 @@ function timingValue(node: GraphNode, key: string, fallback: string) {
   return node.timing.find((field) => field.key === key)?.value ?? fallback;
 }
 
+function editableKindForParameter(
+  parameter: GraphParameter,
+  fieldSpec?: FieldSpec,
+): "string" | "number" | "enum" | "boolean" {
+  if (fieldSpec?.kind === "enum" && fieldSpec.options.length > 0) {
+    return "enum";
+  }
+
+  if (fieldSpec?.kind === "boolean") {
+    return "boolean";
+  }
+
+  if (fieldSpec?.kind === "integer" || fieldSpec?.kind === "number") {
+    return "number";
+  }
+
+  if (parameter.value_kind === "boolean") {
+    return "boolean";
+  }
+
+  if (parameter.value_kind === "number") {
+    return "number";
+  }
+
+  return "string";
+}
+
+function selectOptionsForValue(fieldSpec: FieldSpec, value: string) {
+  if (!value || fieldSpec.options.includes(value)) {
+    return fieldSpec.options;
+  }
+
+  return [value, ...fieldSpec.options];
+}
+
+function isJsonObject(value: JsonValue): value is { [key: string]: JsonValue } {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function formatJsonValue(value: JsonValue) {
+  if (value === null) {
+    return "null";
+  }
+
+  if (typeof value === "string") {
+    return value;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  return JSON.stringify(value);
+}
+
+function ruleActionSchema(schema: SchemaSpec): Extract<SchemaSpec, { kind: "tagged_union" }> | null {
+  if (schema.kind !== "array" || schema.item.kind !== "object") {
+    return null;
+  }
+
+  const actionsField = schema.item.fields.find((field) => field.key === "actions");
+  if (actionsField?.schema?.kind === "array" && actionsField.schema.item.kind === "tagged_union") {
+    return actionsField.schema.item;
+  }
+
+  return null;
+}
+
+function ruleSummary(condition: { [key: string]: JsonValue }, actionCount: number, elseActionCount: number) {
+  const fieldPath = formatJsonValue(condition.field_path ?? null);
+  const operation = formatJsonValue(condition.operation ?? null);
+
+  return `${fieldPath} ${operation} - ${actionCount}/${elseActionCount}`;
+}
+
+function labelFromKey(key: string) {
+  return key
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function summarizeNestedValue(value: JsonValue, schema: SchemaSpec) {
+  if (schema.kind === "object" && isJsonObject(value)) {
+    const condition = value.condition;
+    const actions = value.actions;
+    const elseActions = value.else_actions;
+
+    if (isJsonObject(condition)) {
+      const fieldPath = formatJsonValue(condition.field_path ?? null);
+      const operation = formatJsonValue(condition.operation ?? null);
+      const actionCount = Array.isArray(actions) ? actions.length : 0;
+      const elseCount = Array.isArray(elseActions) ? elseActions.length : 0;
+      return `${fieldPath} ${operation} - ${actionCount}/${elseCount}`;
+    }
+  }
+
+  if (schema.kind === "tagged_union" && isJsonObject(value)) {
+    return formatJsonValue(value[schema.tag] ?? null);
+  }
+
+  if (Array.isArray(value)) {
+    return `${value.length} items`;
+  }
+
+  if (isJsonObject(value)) {
+    return `${Object.keys(value).length} fields`;
+  }
+
+  return formatJsonValue(value);
+}
+
 function DiagnosticBadge({
   count,
   severity,
@@ -1784,6 +2307,17 @@ function graphFocusState(
 function configFileName(path: string) {
   const parts = path.split("/");
   return parts[parts.length - 1] || path;
+}
+
+function readStoredInspectorWidth() {
+  const storedWidth = window.localStorage.getItem(inspectorWidthStorageKey);
+  const parsedWidth = storedWidth ? Number(storedWidth) : defaultInspectorWidth;
+
+  return clampInspectorWidth(Number.isFinite(parsedWidth) ? parsedWidth : defaultInspectorWidth);
+}
+
+function clampInspectorWidth(width: number) {
+  return Math.min(Math.max(Math.round(width), minInspectorWidth), maxInspectorWidth);
 }
 
 function layoutNodePositions(nodes: GraphNode[]) {
