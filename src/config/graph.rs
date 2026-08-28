@@ -8,6 +8,8 @@ use crate::config::types::{ChannelConfig, ChannelType, Config, StageConfig};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
+pub const GRAPH_SCHEMA_VERSION: u32 = 1;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum GraphNodeKind {
@@ -20,11 +22,22 @@ pub enum GraphNodeKind {
 pub struct GraphNode {
     pub id: String,
     pub kind: GraphNodeKind,
+    pub lane: GraphLane,
+    pub lane_index: usize,
     pub display_name: String,
+    pub config_path: String,
     pub pipeline_name: Option<String>,
     pub processor_type: String,
     pub input_channels: Vec<String>,
     pub output_channel: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GraphLane {
+    Inputs,
+    PipelineStages,
+    Outputs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -72,10 +85,23 @@ pub struct GraphDiagnostic {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ResolvedPipelineGraph {
+    pub schema_version: u32,
+    pub summary: GraphSummary,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
     pub channels: Vec<GraphChannel>,
     pub diagnostics: Vec<GraphDiagnostic>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GraphSummary {
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub channel_count: usize,
+    pub diagnostic_count: usize,
+    pub error_count: usize,
+    pub warning_count: usize,
+    pub has_errors: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -87,7 +113,12 @@ struct Producer {
 impl ResolvedPipelineGraph {
     pub fn from_config(config: &Config) -> Self {
         let mut nodes = collect_nodes(config);
-        nodes.sort_by(|a, b| a.id.cmp(&b.id));
+        nodes.sort_by(|a, b| {
+            lane_sort_order(&a.lane)
+                .cmp(&lane_sort_order(&b.lane))
+                .then_with(|| a.lane_index.cmp(&b.lane_index))
+                .then_with(|| a.id.cmp(&b.id))
+        });
 
         let mut producers = collect_producers(&nodes, config);
         for producer_set in producers.values_mut() {
@@ -139,6 +170,8 @@ impl ResolvedPipelineGraph {
         });
 
         Self {
+            schema_version: GRAPH_SCHEMA_VERSION,
+            summary: graph_summary(&nodes, &edges, &channels, &diagnostics),
             nodes,
             edges,
             channels,
@@ -149,34 +182,59 @@ impl ResolvedPipelineGraph {
 
 fn collect_nodes(config: &Config) -> Vec<GraphNode> {
     let mut nodes = Vec::new();
+    let mut input_names: Vec<_> = config.inputs.keys().collect();
+    input_names.sort();
 
-    for (name, stage_config) in &config.inputs {
+    for (lane_index, name) in input_names.iter().enumerate() {
+        let stage_config = &config.inputs[*name];
         nodes.push(graph_node(
             input_node_id(name),
             GraphNodeKind::Input,
+            GraphLane::Inputs,
+            lane_index,
             name,
+            format!("inputs.{}", name),
             None,
             stage_config,
         ));
     }
 
+    let mut pipeline_stage_refs = Vec::new();
     for (pipeline_name, pipeline_config) in &config.pipelines {
-        for (stage_name, stage_config) in &pipeline_config.stages {
+        for stage_name in pipeline_config.stages.keys() {
+            pipeline_stage_refs.push((pipeline_name, stage_name));
+        }
+    }
+    pipeline_stage_refs.sort();
+
+    for (lane_index, (pipeline_name, stage_name)) in pipeline_stage_refs.iter().enumerate() {
+        if let Some(pipeline_config) = config.pipelines.get(*pipeline_name) {
+            let stage_config = &pipeline_config.stages[*stage_name];
             nodes.push(graph_node(
                 pipeline_stage_node_id(pipeline_name, stage_name),
                 GraphNodeKind::PipelineStage,
+                GraphLane::PipelineStages,
+                lane_index,
                 stage_name,
-                Some(pipeline_name.clone()),
+                format!("pipelines.{}.stages.{}", pipeline_name, stage_name),
+                Some((*pipeline_name).clone()),
                 stage_config,
             ));
         }
     }
 
-    for (name, stage_config) in &config.outputs {
+    let mut output_names: Vec<_> = config.outputs.keys().collect();
+    output_names.sort();
+
+    for (lane_index, name) in output_names.iter().enumerate() {
+        let stage_config = &config.outputs[*name];
         nodes.push(graph_node(
             output_node_id(name),
             GraphNodeKind::Output,
+            GraphLane::Outputs,
+            lane_index,
             name,
+            format!("outputs.{}", name),
             None,
             stage_config,
         ));
@@ -188,14 +246,20 @@ fn collect_nodes(config: &Config) -> Vec<GraphNode> {
 fn graph_node(
     id: String,
     kind: GraphNodeKind,
+    lane: GraphLane,
+    lane_index: usize,
     display_name: &str,
+    config_path: String,
     pipeline_name: Option<String>,
     stage_config: &StageConfig,
 ) -> GraphNode {
     GraphNode {
         id,
         kind,
+        lane,
+        lane_index,
         display_name: display_name.to_string(),
+        config_path,
         pipeline_name,
         processor_type: stage_config.r#type.clone(),
         input_channels: stage_config.inputs.clone().unwrap_or_default(),
@@ -464,6 +528,40 @@ fn diagnostic_sort_key(diagnostic: &GraphDiagnostic) -> String {
     )
 }
 
+fn graph_summary(
+    nodes: &[GraphNode],
+    edges: &[GraphEdge],
+    channels: &[GraphChannel],
+    diagnostics: &[GraphDiagnostic],
+) -> GraphSummary {
+    let error_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == GraphDiagnosticSeverity::Error)
+        .count();
+    let warning_count = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.severity == GraphDiagnosticSeverity::Warning)
+        .count();
+
+    GraphSummary {
+        node_count: nodes.len(),
+        edge_count: edges.len(),
+        channel_count: channels.len(),
+        diagnostic_count: diagnostics.len(),
+        error_count,
+        warning_count,
+        has_errors: error_count > 0,
+    }
+}
+
+fn lane_sort_order(lane: &GraphLane) -> usize {
+    match lane {
+        GraphLane::Inputs => 0,
+        GraphLane::PipelineStages => 1,
+        GraphLane::Outputs => 2,
+    }
+}
+
 fn channel_type_name(channel_type: &ChannelType) -> &'static str {
     match channel_type {
         ChannelType::Broadcast => "broadcast",
@@ -691,10 +789,76 @@ mod tests {
         let graph = ResolvedPipelineGraph::from_config(&minimal_config());
         let value = serde_json::to_value(&graph).expect("graph serializes");
 
+        assert_eq!(value["schema_version"], json!(GRAPH_SCHEMA_VERSION));
+        assert_eq!(value["summary"]["node_count"], json!(1));
+        assert_eq!(value["summary"]["warning_count"], json!(1));
         assert_eq!(value["nodes"][0]["id"], json!("input:sensor"));
+        assert_eq!(value["nodes"][0]["lane"], json!("inputs"));
+        assert_eq!(value["nodes"][0]["lane_index"], json!(0));
+        assert_eq!(value["nodes"][0]["config_path"], json!("inputs.sensor"));
         assert!(value["edges"].is_array());
         assert!(value["channels"].is_array());
         assert!(value["diagnostics"].is_array());
+    }
+
+    #[test]
+    fn graph_summary_counts_errors_and_warnings() {
+        let graph = graph_from_toml(
+            r#"
+            [inputs.orphan]
+            type = "simulated"
+            output = "unused"
+
+            [outputs.console]
+            type = "console"
+            inputs = ["missing"]
+            "#,
+        );
+
+        assert_eq!(graph.summary.node_count, 2);
+        assert_eq!(graph.summary.edge_count, 0);
+        assert_eq!(graph.summary.channel_count, 2);
+        assert_eq!(graph.summary.diagnostic_count, 2);
+        assert_eq!(graph.summary.error_count, 1);
+        assert_eq!(graph.summary.warning_count, 1);
+        assert!(graph.summary.has_errors);
+    }
+
+    #[test]
+    fn assigns_deterministic_lane_indexes() {
+        let graph = graph_from_toml(
+            r#"
+            [inputs.z_sensor]
+            type = "simulated"
+            output = "z"
+
+            [inputs.a_sensor]
+            type = "simulated"
+            output = "a"
+
+            [outputs.z_sink]
+            type = "console"
+            inputs = ["z"]
+
+            [outputs.a_sink]
+            type = "console"
+            inputs = ["a"]
+            "#,
+        );
+
+        let a_sensor = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "input:a_sensor")
+            .expect("a_sensor node exists");
+        let z_sensor = graph
+            .nodes
+            .iter()
+            .find(|node| node.id == "input:z_sensor")
+            .expect("z_sensor node exists");
+
+        assert_eq!(a_sensor.lane_index, 0);
+        assert_eq!(z_sensor.lane_index, 1);
     }
 
     #[test]
