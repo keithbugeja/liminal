@@ -70,6 +70,8 @@ type GraphNode = {
   input_channels: string[];
   output_channel: string | null;
   parameters: GraphParameter[];
+  timing: GraphParameter[];
+  concurrency_type: string;
 };
 
 type GraphParameter = {
@@ -648,31 +650,33 @@ function NodeInspector({
     <div className="inspector-body">
       <InspectorTitle eyebrow={node.processor_type} title={node.display_name} />
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
-      <KeyValue label="Kind" value={node.kind} />
-      <KeyValue label="Config path" value={node.config_path} />
-      <KeyValue label="File" value={configPath} />
-      {node.pipeline_name && <KeyValue label="Pipeline" value={node.pipeline_name} />}
-      <KeyValue label="Node ID" value={node.id} />
-
-      <InspectorSection title="Inputs">
-        {node.input_channels.length === 0 ? (
-          <p className="empty-state">No input channels.</p>
-        ) : (
-          <ChannelButtonList channels={node.input_channels} onSelectChannel={onSelectChannel} />
-        )}
-      </InspectorSection>
-
-      <InspectorSection title="Output">
-        {node.output_channel ? (
-          <ChannelButtonList channels={[node.output_channel]} onSelectChannel={onSelectChannel} />
-        ) : (
-          <p className="empty-state">No output channel.</p>
-        )}
-      </InspectorSection>
-
-      <InspectorSection title="Edges">
+      <InspectorSection title="Overview" defaultOpen>
+        <KeyValue label="Kind" value={node.kind} />
+        <KeyValue label="Config path" value={node.config_path} />
+        <KeyValue label="File" value={configPath} />
+        {node.pipeline_name && <KeyValue label="Pipeline" value={node.pipeline_name} />}
+        <KeyValue label="Node ID" value={node.id} />
         <KeyValue label="Incoming" value={String(incomingEdges.length)} />
         <KeyValue label="Outgoing" value={String(outgoingEdges.length)} />
+      </InspectorSection>
+
+      <InspectorSection title="Channels" defaultOpen>
+        <div className="inspector-subsection">
+          <h4>Inputs</h4>
+          {node.input_channels.length === 0 ? (
+            <p className="empty-state">No input channels.</p>
+          ) : (
+            <ChannelButtonList channels={node.input_channels} onSelectChannel={onSelectChannel} />
+          )}
+        </div>
+        <div className="inspector-subsection">
+          <h4>Output</h4>
+          {node.output_channel ? (
+            <ChannelButtonList channels={[node.output_channel]} onSelectChannel={onSelectChannel} />
+          ) : (
+            <p className="empty-state">No output channel.</p>
+          )}
+        </div>
       </InspectorSection>
 
       <InspectorSection title="Stage Fields">
@@ -705,10 +709,67 @@ function NodeInspector({
           ) : (
             <p className="empty-state">No output or channel fields on this node.</p>
           )}
+          <EditableFieldRow
+            label="concurrency.type"
+            value={node.concurrency_type}
+            valueKind="enum"
+            options={["thread", "pipeline", "owner"]}
+            saveState={saveState}
+            onSave={(value) => onUpdateField(node.id, "concurrency.type", value)}
+          />
         </div>
       </InspectorSection>
 
-      <InspectorSection title="Parameters">
+      <InspectorSection title="Timing" badge={node.timing.length > 0 ? String(node.timing.length) : undefined}>
+        <div className="parameter-list">
+          <EditableFieldRow
+            label="timing.event_time_field"
+            value={timingValue(node, "event_time_field", "")}
+            valueKind="string"
+            saveState={saveState}
+            onSave={(value) => onUpdateField(node.id, "timing.event_time_field", value)}
+          />
+          <EditableFieldRow
+            label="timing.max_lateness_ms"
+            value={timingValue(node, "max_lateness_ms", "30000")}
+            valueKind="number"
+            saveState={saveState}
+            onSave={(value) => onUpdateField(node.id, "timing.max_lateness_ms", value)}
+          />
+          <EditableFieldRow
+            label="timing.processing_timeout_ms"
+            value={timingValue(node, "processing_timeout_ms", "")}
+            valueKind="number"
+            saveState={saveState}
+            onSave={(value) => onUpdateField(node.id, "timing.processing_timeout_ms", value)}
+          />
+          <EditableFieldRow
+            label="timing.jitter_bounds_ms"
+            value={timingValue(node, "jitter_bounds_ms", "")}
+            valueKind="number"
+            saveState={saveState}
+            onSave={(value) => onUpdateField(node.id, "timing.jitter_bounds_ms", value)}
+          />
+          <EditableFieldRow
+            label="timing.metrics_enabled"
+            value={timingValue(node, "metrics_enabled", "true")}
+            valueKind="boolean"
+            saveState={saveState}
+            onSave={(value) => onUpdateField(node.id, "timing.metrics_enabled", value)}
+          />
+          {node.timing.some((field) => field.key === "watermark_strategy") && (
+            <div className="parameter-row read-only">
+              <div className="parameter-label">
+                <strong>timing.watermark_strategy</strong>
+                <span>object</span>
+              </div>
+              <pre>configured</pre>
+            </div>
+          )}
+        </div>
+      </InspectorSection>
+
+      <InspectorSection title="Parameters" badge={String(node.parameters.length)}>
         {node.parameters.length === 0 ? (
           <p className="empty-state">No processor parameters.</p>
         ) : (
@@ -726,7 +787,7 @@ function NodeInspector({
         )}
       </InspectorSection>
 
-      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} />
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} defaultOpen={Boolean(selectedDiagnostic)} />
     </div>
   );
 }
@@ -803,7 +864,7 @@ function EditableFieldRow({
 }: {
   label: string;
   value: string;
-  valueKind: "string" | "number" | "enum";
+  valueKind: "string" | "number" | "enum" | "boolean";
   options?: string[];
   saveState: "idle" | "saving" | "error";
   onSave: (value: string) => Promise<void>;
@@ -829,6 +890,15 @@ function EditableFieldRow({
             </option>
           ))}
         </select>
+      ) : valueKind === "boolean" ? (
+        <label className="parameter-toggle">
+          <input
+            type="checkbox"
+            checked={draftValue === "true"}
+            onChange={(event) => setDraftValue(String(event.target.checked))}
+          />
+          <span>{draftValue}</span>
+        </label>
       ) : (
         <input
           value={draftValue}
@@ -863,15 +933,15 @@ function ChannelInspector({
       <KeyValue label="Type" value={channel.channel_type} />
       <KeyValue label="Capacity" value={String(channel.capacity)} />
 
-      <InspectorSection title="Producers">
+      <InspectorSection title="Producers" badge={String(channel.producer_node_ids.length)} defaultOpen>
         <NodeButtonList nodeIds={channel.producer_node_ids} graph={graph} onSelectNode={onSelectNode} />
       </InspectorSection>
 
-      <InspectorSection title="Consumers">
+      <InspectorSection title="Consumers" badge={String(channel.consumer_node_ids.length)} defaultOpen>
         <NodeButtonList nodeIds={channel.consumer_node_ids} graph={graph} onSelectNode={onSelectNode} />
       </InspectorSection>
 
-      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} />
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} defaultOpen={Boolean(selectedDiagnostic)} />
     </div>
   );
 }
@@ -889,7 +959,7 @@ function MissingChannelInspector({
     <div className="inspector-body">
       <InspectorTitle eyebrow="Unresolved Channel" title={channelName} />
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
-      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} />
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} defaultOpen />
     </div>
   );
 }
@@ -912,12 +982,31 @@ function InspectorTitle({ eyebrow, title }: { eyebrow: string; title: string }) 
   );
 }
 
-function InspectorSection({ title, children }: { title: string; children: ReactNode }) {
+function InspectorSection({
+  title,
+  children,
+  badge,
+  defaultOpen = false,
+}: {
+  title: string;
+  children: ReactNode;
+  badge?: string;
+  defaultOpen?: boolean;
+}) {
+  const [isOpen, setIsOpen] = useState(defaultOpen);
+
   return (
-    <section className="inspector-section">
-      <h3>{title}</h3>
-      {children}
-    </section>
+    <details
+      className="inspector-section"
+      open={isOpen}
+      onToggle={(event) => setIsOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <h3>{title}</h3>
+        {badge !== undefined && <span className="section-badge">{badge}</span>}
+      </summary>
+      <div className="inspector-section-body">{children}</div>
+    </details>
   );
 }
 
@@ -978,12 +1067,14 @@ function NodeButtonList({
 function DiagnosticsList({
   diagnostics,
   selectedDiagnostic,
+  defaultOpen = false,
 }: {
   diagnostics: GraphDiagnostic[];
   selectedDiagnostic: GraphDiagnostic | null;
+  defaultOpen?: boolean;
 }) {
   return (
-    <InspectorSection title="Diagnostics">
+    <InspectorSection title="Diagnostics" badge={String(diagnostics.length)} defaultOpen={defaultOpen || diagnostics.length > 0}>
       {diagnostics.length === 0 ? (
         <p className="empty-state">No diagnostics.</p>
       ) : (
@@ -1425,6 +1516,10 @@ function channelClassName(kindClass: string, channelName: string, selectedChanne
   return ["channel", "nodrag", kindClass, channelName === selectedChannelName ? "selected-channel" : ""]
     .filter(Boolean)
     .join(" ");
+}
+
+function timingValue(node: GraphNode, key: string, fallback: string) {
+  return node.timing.find((field) => field.key === key)?.value ?? fallback;
 }
 
 function DiagnosticBadge({

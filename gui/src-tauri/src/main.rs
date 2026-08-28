@@ -170,6 +170,12 @@ fn update_existing_field(
         }
         "channel.type" => set_channel_field(stage, "type", value),
         "channel.capacity" => set_channel_field(stage, "capacity", value),
+        "concurrency.type" => set_concurrency_field(stage, value),
+        "timing.event_time_field" => set_timing_field(stage, "event_time_field", value),
+        "timing.max_lateness_ms" => set_timing_field(stage, "max_lateness_ms", value),
+        "timing.processing_timeout_ms" => set_timing_field(stage, "processing_timeout_ms", value),
+        "timing.jitter_bounds_ms" => set_timing_field(stage, "jitter_bounds_ms", value),
+        "timing.metrics_enabled" => set_timing_field(stage, "metrics_enabled", value),
         _ => Err(format!("Unsupported editable field: {}", field_key)),
     }
 }
@@ -194,9 +200,7 @@ fn set_channel_field(stage: &mut Item, field_key: &str, value: &str) -> Result<(
                 Ok(())
             }
             "capacity" => {
-                let parsed = value
-                    .parse::<i64>()
-                    .map_err(|_| format!("'{}' is not an integer capacity", value))?;
+                let parsed = parse_non_negative_integer(value, "capacity")?;
                 table["capacity"] = toml_edit::value(parsed);
                 Ok(())
             }
@@ -209,9 +213,7 @@ fn set_channel_field(stage: &mut Item, field_key: &str, value: &str) -> Result<(
                 Ok(())
             }
             "capacity" => {
-                let parsed = value
-                    .parse::<i64>()
-                    .map_err(|_| format!("'{}' is not an integer capacity", value))?;
+                let parsed = parse_non_negative_integer(value, "capacity")?;
                 inline_table.insert("capacity", Value::from(parsed));
                 Ok(())
             }
@@ -220,6 +222,117 @@ fn set_channel_field(stage: &mut Item, field_key: &str, value: &str) -> Result<(
     } else {
         Err("Channel settings are not editable as a table".to_string())
     }
+}
+
+fn set_concurrency_field(stage: &mut Item, value: &str) -> Result<(), String> {
+    ensure_inline_table(stage, "concurrency");
+    let concurrency = stage
+        .get_mut("concurrency")
+        .ok_or_else(|| "Concurrency settings are not editable on this stage".to_string())?;
+
+    set_nested_string(concurrency, "type", value)
+}
+
+fn set_timing_field(stage: &mut Item, field_key: &str, value: &str) -> Result<(), String> {
+    if value.trim().is_empty()
+        && matches!(
+            field_key,
+            "event_time_field" | "processing_timeout_ms" | "jitter_bounds_ms"
+        )
+    {
+        if let Some(timing) = stage.get_mut("timing") {
+            remove_nested_field(timing, field_key);
+        }
+        return Ok(());
+    }
+
+    ensure_inline_table(stage, "timing");
+    let timing = stage
+        .get_mut("timing")
+        .ok_or_else(|| "Timing settings are not editable on this stage".to_string())?;
+
+    match field_key {
+        "event_time_field" => set_nested_string(timing, field_key, value),
+        "max_lateness_ms" | "processing_timeout_ms" | "jitter_bounds_ms" => {
+            let parsed = parse_non_negative_integer(value, field_key)?;
+            set_nested_integer(timing, field_key, parsed)
+        }
+        "metrics_enabled" => {
+            let parsed = value
+                .parse::<bool>()
+                .map_err(|_| format!("'{}' is not a boolean", value))?;
+            set_nested_bool(timing, field_key, parsed)
+        }
+        _ => Err(format!("Unsupported timing field: {}", field_key)),
+    }
+}
+
+fn ensure_inline_table(stage: &mut Item, field_key: &str) {
+    if stage.get(field_key).is_none() {
+        stage[field_key] = toml_edit::value(toml_edit::InlineTable::new());
+    }
+}
+
+fn set_nested_string(item: &mut Item, field_key: &str, value: &str) -> Result<(), String> {
+    if let Some(table) = item.as_table_mut() {
+        table[field_key] = toml_edit::value(value);
+        return Ok(());
+    }
+
+    if let Some(inline_table) = item.as_inline_table_mut() {
+        inline_table.insert(field_key, Value::from(value));
+        return Ok(());
+    }
+
+    Err(format!("'{}' is not editable as a table field", field_key))
+}
+
+fn set_nested_integer(item: &mut Item, field_key: &str, value: i64) -> Result<(), String> {
+    if let Some(table) = item.as_table_mut() {
+        table[field_key] = toml_edit::value(value);
+        return Ok(());
+    }
+
+    if let Some(inline_table) = item.as_inline_table_mut() {
+        inline_table.insert(field_key, Value::from(value));
+        return Ok(());
+    }
+
+    Err(format!("'{}' is not editable as a table field", field_key))
+}
+
+fn set_nested_bool(item: &mut Item, field_key: &str, value: bool) -> Result<(), String> {
+    if let Some(table) = item.as_table_mut() {
+        table[field_key] = toml_edit::value(value);
+        return Ok(());
+    }
+
+    if let Some(inline_table) = item.as_inline_table_mut() {
+        inline_table.insert(field_key, Value::from(value));
+        return Ok(());
+    }
+
+    Err(format!("'{}' is not editable as a table field", field_key))
+}
+
+fn remove_nested_field(item: &mut Item, field_key: &str) {
+    if let Some(table) = item.as_table_mut() {
+        table.remove(field_key);
+    } else if let Some(inline_table) = item.as_inline_table_mut() {
+        inline_table.remove(field_key);
+    }
+}
+
+fn parse_non_negative_integer(value: &str, label: &str) -> Result<i64, String> {
+    let parsed = value
+        .parse::<i64>()
+        .map_err(|_| format!("'{}' is not an integer {}", value, label))?;
+
+    if parsed < 0 {
+        return Err(format!("'{}' cannot be negative", label));
+    }
+
+    Ok(parsed)
 }
 
 fn stage_item_mut<'a>(document: &'a mut DocumentMut, node_id: &str) -> Result<&'a mut Item, String> {
@@ -440,6 +553,126 @@ output = "raw_data"
         let edited = document.to_string();
         assert!(edited.contains("channel = {"));
         assert!(edited.contains("capacity = 256"));
+    }
+
+    #[test]
+    fn creates_and_updates_concurrency_table() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+"#,
+        );
+
+        update_existing_field(&mut document, "input:sensor", "concurrency.type", "pipeline")
+            .expect("concurrency type update succeeds");
+
+        let edited = document.to_string();
+        assert!(edited.contains("concurrency = {"));
+        assert!(edited.contains("type = \"pipeline\""));
+    }
+
+    #[test]
+    fn updates_inline_timing_fields() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+timing = { event_time_field = "ts", max_lateness_ms = 30000, metrics_enabled = true }
+"#,
+        );
+
+        update_existing_field(
+            &mut document,
+            "input:sensor",
+            "timing.event_time_field",
+            "event_ts",
+        )
+        .expect("timing event field update succeeds");
+        update_existing_field(
+            &mut document,
+            "input:sensor",
+            "timing.max_lateness_ms",
+            "15000",
+        )
+        .expect("timing lateness update succeeds");
+        update_existing_field(
+            &mut document,
+            "input:sensor",
+            "timing.metrics_enabled",
+            "false",
+        )
+        .expect("timing boolean update succeeds");
+
+        let edited = document.to_string();
+        assert!(edited.contains("event_time_field = \"event_ts\""));
+        assert!(edited.contains("max_lateness_ms = 15000"));
+        assert!(edited.contains("metrics_enabled = false"));
+    }
+
+    #[test]
+    fn updates_table_timing_fields_and_clears_optional_values() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+
+[inputs.sensor.timing]
+event_time_field = "ts"
+processing_timeout_ms = 1000
+jitter_bounds_ms = 50
+"#,
+        );
+
+        update_existing_field(
+            &mut document,
+            "input:sensor",
+            "timing.processing_timeout_ms",
+            "2000",
+        )
+        .expect("timing timeout update succeeds");
+        update_existing_field(&mut document, "input:sensor", "timing.event_time_field", "")
+            .expect("blank optional timing string clears the field");
+        update_existing_field(&mut document, "input:sensor", "timing.jitter_bounds_ms", "")
+            .expect("blank optional timing number clears the field");
+
+        let edited = document.to_string();
+        assert!(edited.contains("[inputs.sensor.timing]"));
+        assert!(edited.contains("processing_timeout_ms = 2000"));
+        assert!(!edited.contains("event_time_field"));
+        assert!(!edited.contains("jitter_bounds_ms"));
+    }
+
+    #[test]
+    fn rejects_invalid_timing_values() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+"#,
+        );
+
+        let number_error = update_existing_field(
+            &mut document,
+            "input:sensor",
+            "timing.max_lateness_ms",
+            "-10",
+        )
+        .expect_err("negative timing value is rejected");
+        let bool_error = update_existing_field(
+            &mut document,
+            "input:sensor",
+            "timing.metrics_enabled",
+            "maybe",
+        )
+        .expect_err("invalid timing bool is rejected");
+
+        assert!(number_error.contains("cannot be negative"));
+        assert!(bool_error.contains("not a boolean"));
     }
 
     #[test]
