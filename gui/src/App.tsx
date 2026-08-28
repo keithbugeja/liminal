@@ -37,6 +37,7 @@ import { ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 type GraphNodeKind = "input" | "pipeline_stage" | "output";
 type GraphLane = "inputs" | "pipeline_stages" | "outputs";
 type DiagnosticSeverity = "warning" | "error";
+type DiagnosticsFilter = "all" | "errors" | "warnings";
 
 type ResolvedPipelineGraph = {
   schema_version: number;
@@ -68,6 +69,14 @@ type GraphNode = {
   processor_type: string;
   input_channels: string[];
   output_channel: string | null;
+  parameters: GraphParameter[];
+};
+
+type GraphParameter = {
+  key: string;
+  value: string;
+  value_kind: string;
+  editable: boolean;
 };
 
 type GraphEdge = {
@@ -97,6 +106,7 @@ type GraphDiagnostic = {
 type FlowNodeData = {
   graphNode: GraphNode;
   diagnostics: GraphDiagnostic[];
+  channelDiagnosticCounts: Record<string, number>;
   selectedChannelName: string | null;
   onSelectChannel: (channelName: string) => void;
 };
@@ -131,8 +141,11 @@ function App() {
   const [graph, setGraph] = useState<ResolvedPipelineGraph | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedChannelName, setSelectedChannelName] = useState<string | null>(null);
+  const [selectedDiagnosticKey, setSelectedDiagnosticKey] = useState<string | null>(null);
+  const [diagnosticsFilter, setDiagnosticsFilter] = useState<DiagnosticsFilter>("all");
   const [filterText, setFilterText] = useState("");
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
 
   const loadGraph = useCallback(async (path: string) => {
@@ -144,13 +157,17 @@ function App() {
       setGraph(nextGraph);
       setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
       setSelectedChannelName(null);
+      setSelectedDiagnosticKey(null);
       setLoadState("idle");
+      setSaveState("idle");
     } catch (caught) {
       setGraph(null);
       setSelectedNodeId(null);
       setSelectedChannelName(null);
+      setSelectedDiagnosticKey(null);
       setError(String(caught));
       setLoadState("error");
+      setSaveState("idle");
     }
   }, []);
 
@@ -160,6 +177,99 @@ function App() {
       .catch(() => setExampleConfigs([]));
     loadGraph(initialConfigPath);
   }, [loadGraph]);
+  const selectNode = useCallback((id: string | null) => {
+    setSelectedNodeId(id);
+    setSelectedChannelName(null);
+    setSelectedDiagnosticKey(null);
+  }, []);
+  const selectChannel = useCallback((channelName: string | null) => {
+    setSelectedChannelName(channelName);
+    if (channelName) {
+      setSelectedNodeId(null);
+    }
+    setSelectedDiagnosticKey(null);
+  }, []);
+  const selectDiagnostic = useCallback((diagnostic: GraphDiagnostic, index: number) => {
+    setSelectedDiagnosticKey(diagnosticKey(diagnostic, index));
+
+    if (diagnostic.channel_name) {
+      setSelectedChannelName(diagnostic.channel_name);
+      setSelectedNodeId(null);
+      return;
+    }
+
+    setSelectedNodeId(diagnostic.node_ids[0] ?? null);
+    setSelectedChannelName(null);
+  }, []);
+  const selectDiagnosticByStep = useCallback(
+    (step: 1 | -1) => {
+      const diagnostics = graph?.diagnostics ?? [];
+      if (diagnostics.length === 0) {
+        return;
+      }
+
+      const currentIndex = diagnostics.findIndex(
+        (diagnostic, index) => diagnosticKey(diagnostic, index) === selectedDiagnosticKey,
+      );
+      const nextIndex =
+        currentIndex === -1
+          ? step === 1
+            ? 0
+            : diagnostics.length - 1
+          : (currentIndex + step + diagnostics.length) % diagnostics.length;
+
+      selectDiagnostic(diagnostics[nextIndex], nextIndex);
+    },
+    [graph, selectDiagnostic, selectedDiagnosticKey],
+  );
+  const updateNodeParameter = useCallback(
+    async (nodeId: string, parameterKey: string, value: string) => {
+      setSaveState("saving");
+      setError(null);
+
+      try {
+        const nextGraph = await invoke<ResolvedPipelineGraph>("update_node_parameter", {
+          path: configPath,
+          nodeId,
+          parameterKey,
+          value,
+        });
+        setGraph(nextGraph);
+        setSelectedNodeId(nodeId);
+        setSelectedChannelName(null);
+        setSelectedDiagnosticKey(null);
+        setSaveState("idle");
+      } catch (caught) {
+        setError(String(caught));
+        setSaveState("error");
+      }
+    },
+    [configPath],
+  );
+  const updateNodeField = useCallback(
+    async (nodeId: string, fieldKey: string, value: string) => {
+      setSaveState("saving");
+      setError(null);
+
+      try {
+        const nextGraph = await invoke<ResolvedPipelineGraph>("update_node_field", {
+          path: configPath,
+          nodeId,
+          fieldKey,
+          value,
+        });
+        setGraph(nextGraph);
+        setSelectedNodeId(nodeId);
+        setSelectedChannelName(null);
+        setSelectedDiagnosticKey(null);
+        setSaveState("idle");
+      } catch (caught) {
+        setError(String(caught));
+        setSaveState("error");
+      }
+    },
+    [configPath],
+  );
 
   return (
     <ReactFlowProvider>
@@ -227,12 +337,15 @@ function App() {
           </div>
 
           <SummaryPanel graph={graph} />
+          <GraphStatusPanel graph={graph} loadState={loadState} saveState={saveState} error={error} />
           <DiagnosticsPanel
             graph={graph}
-            onSelectNode={(id) => {
-              setSelectedNodeId(id);
-              setSelectedChannelName(null);
-            }}
+            filter={diagnosticsFilter}
+            onFilterChange={setDiagnosticsFilter}
+            selectedDiagnosticKey={selectedDiagnosticKey}
+            onSelectDiagnostic={selectDiagnostic}
+            onPreviousDiagnostic={() => selectDiagnosticByStep(-1)}
+            onNextDiagnostic={() => selectDiagnosticByStep(1)}
           />
         </aside>
 
@@ -241,9 +354,10 @@ function App() {
             graph={graph}
             selectedNodeId={selectedNodeId}
             selectedChannelName={selectedChannelName}
+            selectedDiagnosticKey={selectedDiagnosticKey}
             filterText={filterText}
-            onSelectNode={setSelectedNodeId}
-            onSelectChannel={setSelectedChannelName}
+            onSelectNode={selectNode}
+            onSelectChannel={selectChannel}
             error={error}
             loadState={loadState}
           />
@@ -251,10 +365,15 @@ function App() {
 
         <InspectorPanel
           graph={graph}
+          configPath={configPath}
           selectedNodeId={selectedNodeId}
           selectedChannelName={selectedChannelName}
-          onSelectNode={setSelectedNodeId}
-          onSelectChannel={setSelectedChannelName}
+          selectedDiagnosticKey={selectedDiagnosticKey}
+          onSelectNode={selectNode}
+          onSelectChannel={selectChannel}
+          onUpdateNodeParameter={updateNodeParameter}
+          onUpdateNodeField={updateNodeField}
+          saveState={saveState}
         />
       </div>
     </ReactFlowProvider>
@@ -280,6 +399,29 @@ function SummaryPanel({ graph }: { graph: ResolvedPipelineGraph | null }) {
   );
 }
 
+function GraphStatusPanel({
+  graph,
+  loadState,
+  saveState,
+  error,
+}: {
+  graph: ResolvedPipelineGraph | null;
+  loadState: "idle" | "loading" | "error";
+  saveState: "idle" | "saving" | "error";
+  error: string | null;
+}) {
+  const status = graphStatus(graph, loadState, saveState, error);
+
+  return (
+    <section className={`status-panel ${status.severity}`}>
+      <div>
+        <span>{status.label}</span>
+        <p>{status.detail}</p>
+      </div>
+    </section>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div className="metric">
@@ -291,12 +433,26 @@ function Metric({ label, value }: { label: string; value: number }) {
 
 function DiagnosticsPanel({
   graph,
-  onSelectNode,
+  filter,
+  onFilterChange,
+  selectedDiagnosticKey,
+  onSelectDiagnostic,
+  onPreviousDiagnostic,
+  onNextDiagnostic,
 }: {
   graph: ResolvedPipelineGraph | null;
-  onSelectNode: (id: string) => void;
+  filter: DiagnosticsFilter;
+  onFilterChange: (filter: DiagnosticsFilter) => void;
+  selectedDiagnosticKey: string | null;
+  onSelectDiagnostic: (diagnostic: GraphDiagnostic, index: number) => void;
+  onPreviousDiagnostic: () => void;
+  onNextDiagnostic: () => void;
 }) {
   const diagnostics = graph?.diagnostics ?? [];
+  const filteredDiagnostics = diagnostics
+    .map((diagnostic, index) => ({ diagnostic, index }))
+    .filter(({ diagnostic }) => diagnosticMatchesFilter(diagnostic, filter));
+  const groupedDiagnostics = groupDiagnosticsBySeverity(filteredDiagnostics);
 
   return (
     <section className="panel diagnostics-panel">
@@ -304,24 +460,59 @@ function DiagnosticsPanel({
         <AlertCircle size={16} />
         <span>Diagnostics</span>
       </div>
+      <div className="diagnostic-toolbar">
+        <div className="segmented-control" aria-label="Diagnostics filter">
+          <button className={filter === "all" ? "active" : ""} onClick={() => onFilterChange("all")}>
+            All
+          </button>
+          <button className={filter === "errors" ? "active" : ""} onClick={() => onFilterChange("errors")}>
+            Errors
+          </button>
+          <button className={filter === "warnings" ? "active" : ""} onClick={() => onFilterChange("warnings")}>
+            Warnings
+          </button>
+        </div>
+        <div className="diagnostic-nav">
+          <button onClick={onPreviousDiagnostic} disabled={diagnostics.length === 0} aria-label="Previous diagnostic">
+            Prev
+          </button>
+          <button onClick={onNextDiagnostic} disabled={diagnostics.length === 0} aria-label="Next diagnostic">
+            Next
+          </button>
+        </div>
+      </div>
       {diagnostics.length === 0 ? (
         <p className="empty-state">No graph diagnostics.</p>
+      ) : filteredDiagnostics.length === 0 ? (
+        <p className="empty-state">No diagnostics match this filter.</p>
       ) : (
         <div className="diagnostic-list">
-          {diagnostics.map((diagnostic, index) => (
-            <button
-              key={`${diagnostic.kind}-${diagnostic.channel_name}-${index}`}
-              className={`diagnostic ${diagnostic.severity}`}
-              onClick={() => {
-                const [firstNode] = diagnostic.node_ids;
-                if (firstNode) {
-                  onSelectNode(firstNode);
-                }
-              }}
-            >
-              <span>{diagnostic.severity}</span>
-              <p>{diagnostic.message}</p>
-            </button>
+          {groupedDiagnostics.map(({ severity, items }) => (
+            <div className="diagnostic-group" key={severity}>
+              <div className="diagnostic-group-title">
+                <span>{severity}</span>
+                <strong>{items.length}</strong>
+              </div>
+              {items.map(({ diagnostic, index }) => (
+                <button
+                  key={`${diagnostic.kind}-${diagnostic.channel_name}-${index}`}
+                  className={[
+                    "diagnostic",
+                    diagnostic.severity,
+                    diagnosticKey(diagnostic, index) === selectedDiagnosticKey ? "selected" : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  onClick={() => onSelectDiagnostic(diagnostic, index)}
+                >
+                  <div className="diagnostic-meta">
+                    <span>{diagnostic.kind}</span>
+                    <code>{diagnostic.channel_name ?? diagnostic.node_ids[0] ?? "graph"}</code>
+                  </div>
+                  <p>{diagnostic.message}</p>
+                </button>
+              ))}
+            </div>
           ))}
         </div>
       )}
@@ -331,16 +522,26 @@ function DiagnosticsPanel({
 
 function InspectorPanel({
   graph,
+  configPath,
   selectedNodeId,
   selectedChannelName,
+  selectedDiagnosticKey,
   onSelectNode,
   onSelectChannel,
+  onUpdateNodeParameter,
+  onUpdateNodeField,
+  saveState,
 }: {
   graph: ResolvedPipelineGraph | null;
+  configPath: string;
   selectedNodeId: string | null;
   selectedChannelName: string | null;
+  selectedDiagnosticKey: string | null;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
+  onUpdateNodeParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
+  onUpdateNodeField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
+  saveState: "idle" | "saving" | "error";
 }) {
   const selectedNode = graph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedChannel =
@@ -351,6 +552,9 @@ function InspectorPanel({
   const channelDiagnostics = selectedChannelName
     ? graph?.diagnostics.filter((diagnostic) => diagnostic.channel_name === selectedChannelName) ?? []
     : [];
+  const selectedDiagnostic =
+    graph?.diagnostics.find((diagnostic, index) => diagnosticKey(diagnostic, index) === selectedDiagnosticKey) ??
+    null;
   const selectNode = useCallback(
     (id: string | null) => {
       onSelectNode(id);
@@ -382,16 +586,26 @@ function InspectorPanel({
           channel={selectedChannel}
           graph={graph}
           diagnostics={channelDiagnostics}
+          selectedDiagnostic={selectedDiagnostic}
           onSelectNode={selectNode}
         />
       ) : selectedChannelName ? (
-        <MissingChannelInspector channelName={selectedChannelName} diagnostics={channelDiagnostics} />
+        <MissingChannelInspector
+          channelName={selectedChannelName}
+          diagnostics={channelDiagnostics}
+          selectedDiagnostic={selectedDiagnostic}
+        />
       ) : selectedNode ? (
         <NodeInspector
           node={selectedNode}
+          configPath={configPath}
           graph={graph}
           diagnostics={nodeDiagnostics}
+          selectedDiagnostic={selectedDiagnostic}
           onSelectChannel={selectChannel}
+          onUpdateParameter={onUpdateNodeParameter}
+          onUpdateField={onUpdateNodeField}
+          saveState={saveState}
         />
       ) : (
         <div className="inspector-empty">
@@ -405,23 +619,38 @@ function InspectorPanel({
 
 function NodeInspector({
   node,
+  configPath,
   graph,
   diagnostics,
+  selectedDiagnostic,
   onSelectChannel,
+  onUpdateParameter,
+  onUpdateField,
+  saveState,
 }: {
   node: GraphNode;
+  configPath: string;
   graph: ResolvedPipelineGraph;
   diagnostics: GraphDiagnostic[];
+  selectedDiagnostic: GraphDiagnostic | null;
   onSelectChannel: (channelName: string | null) => void;
+  onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
+  onUpdateField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
+  saveState: "idle" | "saving" | "error";
 }) {
   const incomingEdges = graph.edges.filter((edge) => edge.target_node_id === node.id);
   const outgoingEdges = graph.edges.filter((edge) => edge.source_node_id === node.id);
+  const outputChannel = node.output_channel
+    ? graph.channels.find((channel) => channel.name === node.output_channel) ?? null
+    : null;
 
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow={node.processor_type} title={node.display_name} />
+      {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
       <KeyValue label="Kind" value={node.kind} />
       <KeyValue label="Config path" value={node.config_path} />
+      <KeyValue label="File" value={configPath} />
       {node.pipeline_name && <KeyValue label="Pipeline" value={node.pipeline_name} />}
       <KeyValue label="Node ID" value={node.id} />
 
@@ -446,7 +675,170 @@ function NodeInspector({
         <KeyValue label="Outgoing" value={String(outgoingEdges.length)} />
       </InspectorSection>
 
-      <DiagnosticsList diagnostics={diagnostics} />
+      <InspectorSection title="Stage Fields">
+        <div className="parameter-list">
+          {node.output_channel ? (
+            <>
+              <EditableFieldRow
+                label="output"
+                value={node.output_channel}
+                valueKind="string"
+                saveState={saveState}
+                onSave={(value) => onUpdateField(node.id, "output", value)}
+              />
+              <EditableFieldRow
+                label="channel.type"
+                value={outputChannel?.channel_type ?? "broadcast"}
+                valueKind="enum"
+                options={["broadcast", "direct", "shared", "fanout"]}
+                saveState={saveState}
+                onSave={(value) => onUpdateField(node.id, "channel.type", value)}
+              />
+              <EditableFieldRow
+                label="channel.capacity"
+                value={String(outputChannel?.capacity ?? 128)}
+                valueKind="number"
+                saveState={saveState}
+                onSave={(value) => onUpdateField(node.id, "channel.capacity", value)}
+              />
+            </>
+          ) : (
+            <p className="empty-state">No output or channel fields on this node.</p>
+          )}
+        </div>
+      </InspectorSection>
+
+      <InspectorSection title="Parameters">
+        {node.parameters.length === 0 ? (
+          <p className="empty-state">No processor parameters.</p>
+        ) : (
+          <div className="parameter-list">
+            {node.parameters.map((parameter) => (
+              <ParameterRow
+                key={parameter.key}
+                nodeId={node.id}
+                parameter={parameter}
+                saveState={saveState}
+                onUpdateParameter={onUpdateParameter}
+              />
+            ))}
+          </div>
+        )}
+      </InspectorSection>
+
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} />
+    </div>
+  );
+}
+
+function ParameterRow({
+  nodeId,
+  parameter,
+  saveState,
+  onUpdateParameter,
+}: {
+  nodeId: string;
+  parameter: GraphParameter;
+  saveState: "idle" | "saving" | "error";
+  onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
+}) {
+  const [draftValue, setDraftValue] = useState(parameter.value);
+  const isDirty = draftValue !== parameter.value;
+
+  useEffect(() => {
+    setDraftValue(parameter.value);
+  }, [parameter.value]);
+
+  if (!parameter.editable) {
+    return (
+      <div className="parameter-row read-only">
+        <div className="parameter-label">
+          <strong>{parameter.key}</strong>
+          <span>{parameter.value_kind}</span>
+        </div>
+        <pre>{parameter.value}</pre>
+      </div>
+    );
+  }
+
+  return (
+    <div className="parameter-row">
+      <div className="parameter-label">
+        <strong>{parameter.key}</strong>
+        <span>{parameter.value_kind}</span>
+      </div>
+      {parameter.value_kind === "boolean" ? (
+        <label className="parameter-toggle">
+          <input
+            type="checkbox"
+            checked={draftValue === "true"}
+            onChange={(event) => setDraftValue(String(event.target.checked))}
+          />
+          <span>{draftValue}</span>
+        </label>
+      ) : (
+        <input
+          value={draftValue}
+          type={parameter.value_kind === "number" ? "number" : "text"}
+          onChange={(event) => setDraftValue(event.target.value)}
+        />
+      )}
+      <button
+        disabled={!isDirty || saveState === "saving"}
+        onClick={() => onUpdateParameter(nodeId, parameter.key, draftValue)}
+      >
+        {saveState === "saving" ? "Saving" : "Save"}
+      </button>
+    </div>
+  );
+}
+
+function EditableFieldRow({
+  label,
+  value,
+  valueKind,
+  options,
+  saveState,
+  onSave,
+}: {
+  label: string;
+  value: string;
+  valueKind: "string" | "number" | "enum";
+  options?: string[];
+  saveState: "idle" | "saving" | "error";
+  onSave: (value: string) => Promise<void>;
+}) {
+  const [draftValue, setDraftValue] = useState(value);
+  const isDirty = draftValue !== value;
+
+  useEffect(() => {
+    setDraftValue(value);
+  }, [value]);
+
+  return (
+    <div className="parameter-row">
+      <div className="parameter-label">
+        <strong>{label}</strong>
+        <span>{valueKind}</span>
+      </div>
+      {valueKind === "enum" ? (
+        <select value={draftValue} onChange={(event) => setDraftValue(event.target.value)}>
+          {(options ?? []).map((option) => (
+            <option key={option} value={option}>
+              {option}
+            </option>
+          ))}
+        </select>
+      ) : (
+        <input
+          value={draftValue}
+          type={valueKind === "number" ? "number" : "text"}
+          onChange={(event) => setDraftValue(event.target.value)}
+        />
+      )}
+      <button disabled={!isDirty || saveState === "saving"} onClick={() => onSave(draftValue)}>
+        {saveState === "saving" ? "Saving" : "Save"}
+      </button>
     </div>
   );
 }
@@ -455,16 +847,19 @@ function ChannelInspector({
   channel,
   graph,
   diagnostics,
+  selectedDiagnostic,
   onSelectNode,
 }: {
   channel: GraphChannel;
   graph: ResolvedPipelineGraph;
   diagnostics: GraphDiagnostic[];
+  selectedDiagnostic: GraphDiagnostic | null;
   onSelectNode: (id: string | null) => void;
 }) {
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow="Channel" title={channel.name} />
+      {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
       <KeyValue label="Type" value={channel.channel_type} />
       <KeyValue label="Capacity" value={String(channel.capacity)} />
 
@@ -476,7 +871,7 @@ function ChannelInspector({
         <NodeButtonList nodeIds={channel.consumer_node_ids} graph={graph} onSelectNode={onSelectNode} />
       </InspectorSection>
 
-      <DiagnosticsList diagnostics={diagnostics} />
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} />
     </div>
   );
 }
@@ -484,14 +879,26 @@ function ChannelInspector({
 function MissingChannelInspector({
   channelName,
   diagnostics,
+  selectedDiagnostic,
 }: {
   channelName: string;
   diagnostics: GraphDiagnostic[];
+  selectedDiagnostic: GraphDiagnostic | null;
 }) {
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow="Unresolved Channel" title={channelName} />
-      <DiagnosticsList diagnostics={diagnostics} />
+      {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={selectedDiagnostic} />
+    </div>
+  );
+}
+
+function SelectedDiagnostic({ diagnostic }: { diagnostic: GraphDiagnostic }) {
+  return (
+    <div className={`selected-diagnostic ${diagnostic.severity}`}>
+      <span>{diagnostic.severity}</span>
+      <p>{diagnostic.message}</p>
     </div>
   );
 }
@@ -568,7 +975,13 @@ function NodeButtonList({
   );
 }
 
-function DiagnosticsList({ diagnostics }: { diagnostics: GraphDiagnostic[] }) {
+function DiagnosticsList({
+  diagnostics,
+  selectedDiagnostic,
+}: {
+  diagnostics: GraphDiagnostic[];
+  selectedDiagnostic: GraphDiagnostic | null;
+}) {
   return (
     <InspectorSection title="Diagnostics">
       {diagnostics.length === 0 ? (
@@ -578,7 +991,13 @@ function DiagnosticsList({ diagnostics }: { diagnostics: GraphDiagnostic[] }) {
           {diagnostics.map((diagnostic, index) => (
             <div
               key={`${diagnostic.kind}-${diagnostic.channel_name}-${index}`}
-              className={`inspector-diagnostic ${diagnostic.severity}`}
+              className={[
+                "inspector-diagnostic",
+                diagnostic.severity,
+                selectedDiagnostic === diagnostic ? "selected" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
             >
               <span>{diagnostic.severity}</span>
               <p>{diagnostic.message}</p>
@@ -594,6 +1013,7 @@ function GraphCanvas({
   graph,
   selectedNodeId,
   selectedChannelName,
+  selectedDiagnosticKey,
   filterText,
   onSelectNode,
   onSelectChannel,
@@ -603,6 +1023,7 @@ function GraphCanvas({
   graph: ResolvedPipelineGraph | null;
   selectedNodeId: string | null;
   selectedChannelName: string | null;
+  selectedDiagnosticKey: string | null;
   filterText: string;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
@@ -610,9 +1031,10 @@ function GraphCanvas({
   loadState: "idle" | "loading" | "error";
 }) {
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
+  const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
   const focusState = useMemo(
-    () => graphFocusState(graph, selectedNodeId, selectedChannelName),
-    [graph, selectedChannelName, selectedNodeId],
+    () => graphFocusState(graph, selectedNodeId, selectedChannelName, selectedDiagnosticKey),
+    [graph, selectedChannelName, selectedDiagnosticKey, selectedNodeId],
   );
   const channelByName = useMemo(() => {
     const map = new Map<string, GraphChannel>();
@@ -635,6 +1057,12 @@ function GraphCanvas({
         node.processor_type.toLowerCase().includes(query) ||
         channels.includes(query);
       const isFocusMuted = Boolean(focusState) && !focusState?.activeNodeIds.has(node.id);
+      const channelDiagnosticCounts = [...node.input_channels, node.output_channel ?? ""]
+        .filter(Boolean)
+        .reduce<Record<string, number>>((counts, channelName) => {
+          counts[channelName] = diagnosticsByChannel.get(channelName) ?? 0;
+          return counts;
+        }, {});
 
       return {
         id: node.id,
@@ -647,6 +1075,7 @@ function GraphCanvas({
         data: {
           graphNode: node,
           diagnostics: diagnosticsByNode.get(node.id) ?? [],
+          channelDiagnosticCounts,
           selectedChannelName,
           onSelectChannel,
         },
@@ -659,13 +1088,24 @@ function GraphCanvas({
           .join(" "),
       };
     });
-  }, [diagnosticsByNode, filterText, focusState, graph, onSelectChannel, selectedChannelName, selectedNodeId]);
+  }, [
+    diagnosticsByChannel,
+    diagnosticsByNode,
+    filterText,
+    focusState,
+    graph,
+    onSelectChannel,
+    selectedChannelName,
+    selectedNodeId,
+  ]);
 
   const flowEdges = useMemo<Edge[]>(() => {
     return (graph?.edges ?? []).map((edge, index) => {
       const channel = channelByName.get(edge.channel_name);
       const color = colorForChannel(edge.channel_name);
       const laneOffset = ((index % 5) - 2) * 14;
+      const channelDiagnostics =
+        graph?.diagnostics.filter((diagnostic) => diagnostic.channel_name === edge.channel_name) ?? [];
       const pathState = focusState
         ? focusState.activeEdgeIds.has(edge.id)
           ? "active"
@@ -691,6 +1131,7 @@ function GraphCanvas({
           color,
           laneOffset,
           pathState,
+          severity: severityForDiagnostics(channelDiagnostics),
         },
         animated: channel?.channel_type === "broadcast" || channel?.channel_type === "fanout",
         style: { stroke: color, strokeWidth: 2.1 },
@@ -745,7 +1186,7 @@ function GraphCanvas({
 
   return (
     <div className="canvas-shell">
-      <LaneLabels />
+      <LaneLabels graph={graph} />
       <div className="flow-area">
         <ReactFlow
           nodes={nodes}
@@ -795,9 +1236,10 @@ function GraphCanvas({
 }
 
 function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
-  const { graphNode, diagnostics, selectedChannelName, onSelectChannel } = data;
+  const { graphNode, diagnostics, channelDiagnosticCounts, selectedChannelName, onSelectChannel } = data;
   const hasError = diagnostics.some((diagnostic) => diagnostic.severity === "error");
   const hasWarning = diagnostics.some((diagnostic) => diagnostic.severity === "warning");
+  const diagnosticSeverity = severityForDiagnostics(diagnostics);
   const className = [
     "liminal-node",
     graphNode.kind,
@@ -814,6 +1256,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
       <div className="node-header">
         <CircleDot size={14} />
         <span>{graphNode.processor_type}</span>
+        {diagnosticSeverity && <DiagnosticBadge count={diagnostics.length} severity={diagnosticSeverity} />}
       </div>
       <strong>{graphNode.display_name}</strong>
       <p>{graphNode.config_path}</p>
@@ -836,6 +1279,9 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
               isConnectable={false}
             />
             <span className="channel-text">{channel}</span>
+            {(channelDiagnosticCounts[channel] ?? 0) > 0 && (
+              <DiagnosticBadge count={channelDiagnosticCounts[channel]} severity="warning" compact />
+            )}
           </button>
         ))}
         {outputChannel && (
@@ -855,6 +1301,9 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
               position={Position.Right}
               isConnectable={false}
             />
+            {(channelDiagnosticCounts[outputChannel] ?? 0) > 0 && (
+              <DiagnosticBadge count={channelDiagnosticCounts[outputChannel]} severity="warning" compact />
+            )}
           </button>
         )}
       </div>
@@ -867,6 +1316,7 @@ type ChannelEdgeData = {
   color: string;
   laneOffset: number;
   pathState: "active" | "muted" | null;
+  severity: DiagnosticSeverity | null;
 };
 
 function ChannelEdge({
@@ -882,7 +1332,13 @@ function ChannelEdge({
   selected,
   data,
 }: EdgeProps<Edge<ChannelEdgeData>>) {
-  const edgeData = data ?? { channelName: "", color: "#67e5d8", laneOffset: 0, pathState: null };
+  const edgeData = data ?? {
+    channelName: "",
+    color: "#67e5d8",
+    laneOffset: 0,
+    pathState: null,
+    severity: null,
+  };
   const [basePath, labelX, labelY] = getBezierPath({
     sourceX,
     sourceY,
@@ -906,6 +1362,7 @@ function ChannelEdge({
         className={[
           "channel-edge",
           selected ? "selected" : "",
+          edgeData.severity ? edgeData.severity : "",
           edgeData.pathState === "active" ? "focus-active" : "",
           edgeData.pathState === "muted" ? "focus-muted" : "",
         ]
@@ -922,6 +1379,7 @@ function ChannelEdge({
             "edge-label",
             "nodrag",
             "nopan",
+            edgeData.severity ? edgeData.severity : "",
             edgeData.pathState === "active" ? "focus-active" : "",
             edgeData.pathState === "muted" ? "focus-muted" : "",
           ]
@@ -969,6 +1427,18 @@ function channelClassName(kindClass: string, channelName: string, selectedChanne
     .join(" ");
 }
 
+function DiagnosticBadge({
+  count,
+  severity,
+  compact = false,
+}: {
+  count: number;
+  severity: DiagnosticSeverity;
+  compact?: boolean;
+}) {
+  return <span className={`diagnostic-badge ${severity} ${compact ? "compact" : ""}`}>{count}</span>;
+}
+
 function colorForChannel(channelName: string) {
   let hash = 0;
   for (const character of channelName) {
@@ -978,14 +1448,20 @@ function colorForChannel(channelName: string) {
   return channelPalette[hash % channelPalette.length];
 }
 
-function LaneLabels() {
+function LaneLabels({ graph }: { graph: ResolvedPipelineGraph }) {
   return (
     <div className="lane-labels">
-      {(["inputs", "pipeline_stages", "outputs"] as GraphLane[]).map((lane) => (
+      {(["inputs", "pipeline_stages", "outputs"] as GraphLane[]).map((lane) => {
+        const diagnostics = diagnosticsForLane(graph, lane);
+        const severity = severityForDiagnostics(diagnostics);
+
+        return (
         <div key={lane}>
-          {laneTitle[lane]}
+          <span>{laneTitle[lane]}</span>
+          {severity && <DiagnosticBadge count={diagnostics.length} severity={severity} />}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -1004,44 +1480,189 @@ function diagnosticsByNodeId(graph: ResolvedPipelineGraph | null) {
   return map;
 }
 
+function graphStatus(
+  graph: ResolvedPipelineGraph | null,
+  loadState: "idle" | "loading" | "error",
+  saveState: "idle" | "saving" | "error",
+  error: string | null,
+) {
+  if (loadState === "loading") {
+    return {
+      severity: "loading",
+      label: "Loading",
+      detail: "Parsing config and resolving graph.",
+    };
+  }
+
+  if (loadState === "error") {
+    return {
+      severity: "error",
+      label: "Invalid Config",
+      detail: error ?? "The config could not be loaded.",
+    };
+  }
+
+  if (saveState === "saving") {
+    return {
+      severity: "loading",
+      label: "Saving",
+      detail: "Writing parameter edit and resolving graph.",
+    };
+  }
+
+  if (saveState === "error") {
+    return {
+      severity: "error",
+      label: "Edit Rejected",
+      detail: error ?? "The parameter edit could not be saved.",
+    };
+  }
+
+  if (!graph) {
+    return {
+      severity: "neutral",
+      label: "No Graph",
+      detail: "No resolved graph is available.",
+    };
+  }
+
+  if (graph.summary.error_count > 0) {
+    return {
+      severity: "error",
+      label: "Errors",
+      detail: `${graph.summary.error_count} error diagnostics require attention.`,
+    };
+  }
+
+  if (graph.summary.warning_count > 0) {
+    return {
+      severity: "warning",
+      label: "Warnings",
+      detail: `${graph.summary.warning_count} warning diagnostics found.`,
+    };
+  }
+
+  return {
+    severity: "valid",
+    label: "Valid Graph",
+    detail: "No graph diagnostics detected.",
+  };
+}
+
+function diagnosticMatchesFilter(diagnostic: GraphDiagnostic, filter: DiagnosticsFilter) {
+  if (filter === "errors") {
+    return diagnostic.severity === "error";
+  }
+
+  if (filter === "warnings") {
+    return diagnostic.severity === "warning";
+  }
+
+  return true;
+}
+
+function groupDiagnosticsBySeverity(items: { diagnostic: GraphDiagnostic; index: number }[]) {
+  return (["error", "warning"] as DiagnosticSeverity[])
+    .map((severity) => ({
+      severity,
+      items: items.filter(({ diagnostic }) => diagnostic.severity === severity),
+    }))
+    .filter((group) => group.items.length > 0);
+}
+
+function diagnosticCountByChannelName(graph: ResolvedPipelineGraph | null) {
+  const map = new Map<string, number>();
+
+  graph?.diagnostics.forEach((diagnostic) => {
+    if (!diagnostic.channel_name) {
+      return;
+    }
+
+    map.set(diagnostic.channel_name, (map.get(diagnostic.channel_name) ?? 0) + 1);
+  });
+
+  return map;
+}
+
+function diagnosticsForLane(graph: ResolvedPipelineGraph, lane: GraphLane) {
+  const laneNodeIds = new Set(graph.nodes.filter((node) => node.lane === lane).map((node) => node.id));
+
+  return graph.diagnostics.filter((diagnostic) =>
+    diagnostic.node_ids.some((nodeId) => laneNodeIds.has(nodeId)),
+  );
+}
+
+function severityForDiagnostics(diagnostics: GraphDiagnostic[]) {
+  if (diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+    return "error";
+  }
+
+  if (diagnostics.some((diagnostic) => diagnostic.severity === "warning")) {
+    return "warning";
+  }
+
+  return null;
+}
+
+function diagnosticKey(diagnostic: GraphDiagnostic, index: number) {
+  return [
+    index,
+    diagnostic.kind,
+    diagnostic.severity,
+    diagnostic.channel_name ?? "",
+    diagnostic.node_ids.join(","),
+  ].join(":");
+}
+
 function graphFocusState(
   graph: ResolvedPipelineGraph | null,
   selectedNodeId: string | null,
   selectedChannelName: string | null,
+  selectedDiagnosticKey: string | null,
 ): FocusState | null {
   if (!graph) {
     return null;
   }
 
-  if (selectedChannelName) {
+  const selectedDiagnostic =
+    graph.diagnostics.find((diagnostic, index) => diagnosticKey(diagnostic, index) === selectedDiagnosticKey) ??
+    null;
+
+  if (selectedChannelName || selectedDiagnostic?.channel_name) {
+    const channelName = selectedChannelName ?? selectedDiagnostic?.channel_name;
+    if (!channelName) {
+      return null;
+    }
     const activeEdgeIds = new Set(
       graph.edges
-        .filter((edge) => edge.channel_name === selectedChannelName)
+        .filter((edge) => edge.channel_name === channelName)
         .map((edge) => edge.id),
     );
     const activeNodeIds = new Set<string>();
 
     graph.edges
-      .filter((edge) => edge.channel_name === selectedChannelName)
+      .filter((edge) => edge.channel_name === channelName)
       .forEach((edge) => {
         activeNodeIds.add(edge.source_node_id);
         activeNodeIds.add(edge.target_node_id);
       });
 
-    const channel = graph.channels.find((candidate) => candidate.name === selectedChannelName);
+    const channel = graph.channels.find((candidate) => candidate.name === channelName);
     channel?.producer_node_ids.forEach((nodeId) => activeNodeIds.add(nodeId));
     channel?.consumer_node_ids.forEach((nodeId) => activeNodeIds.add(nodeId));
+    selectedDiagnostic?.node_ids.forEach((nodeId) => activeNodeIds.add(nodeId));
 
     return { activeNodeIds, activeEdgeIds };
   }
 
-  if (!selectedNodeId) {
+  const focusNodeId = selectedNodeId ?? selectedDiagnostic?.node_ids[0] ?? null;
+  if (!focusNodeId) {
     return null;
   }
 
-  const activeNodeIds = new Set<string>([selectedNodeId]);
+  const activeNodeIds = new Set<string>([focusNodeId]);
   const activeEdgeIds = new Set<string>();
-  const frontier = [selectedNodeId];
+  const frontier = [focusNodeId];
 
   while (frontier.length > 0) {
     const nodeId = frontier.shift();
