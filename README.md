@@ -371,9 +371,7 @@ if self.timing.should_drop_message(&message) {
 
 ## Liminal GUI
 
-```markdown
 ![Liminal GUI](docs/images/liminal-gui.png)
-```
 
 Liminal also includes a desktop GUI for designing, inspecting, editing, and running
 pipeline configurations. The GUI is built with Tauri and React, while the pipeline
