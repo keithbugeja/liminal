@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   applyEdgeChanges,
   applyNodeChanges,
@@ -38,11 +39,14 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
   Search,
+  Square,
+  Terminal,
   Trash2,
 } from "lucide-react";
 import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -52,6 +56,8 @@ type GraphLane = "inputs" | "pipeline_stages" | "outputs";
 type DiagnosticSeverity = "warning" | "error";
 type DiagnosticsFilter = "all" | "errors" | "warnings";
 type SaveState = "idle" | "dirty" | "saving" | "error";
+type RuntimeState = "idle" | "starting" | "running" | "stopping" | "error";
+type RuntimeLogStream = "stdout" | "stderr" | "system";
 
 type ResolvedPipelineGraph = {
   schema_version: number;
@@ -65,6 +71,22 @@ type ResolvedPipelineGraph = {
 type DraftEditResult = {
   graph: ResolvedPipelineGraph;
   content: string;
+};
+
+type RuntimeLogEntry = {
+  id: number;
+  stream: RuntimeLogStream;
+  line: string;
+};
+
+type PipelineLogEvent = {
+  stream: RuntimeLogStream;
+  line: string;
+};
+
+type PipelineStateEvent = {
+  state: "idle" | "running" | "stopped" | "error";
+  message: string | null;
 };
 
 type GraphSummary = {
@@ -243,6 +265,7 @@ const conditionOperationOptions = [
 const nodeTypes = { liminalNode: LiminalNode };
 const edgeTypes = { channelEdge: ChannelEdge };
 const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "#78d879"];
+const maxRuntimeLogs = 500;
 
 function App() {
   const [configPath, setConfigPath] = useState(initialConfigPath);
@@ -262,6 +285,9 @@ function App() {
   const [filterText, setFilterText] = useState("");
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [runtimeState, setRuntimeState] = useState<RuntimeState>("idle");
+  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLogEntry[]>([]);
+  const [runtimeLogFilter, setRuntimeLogFilter] = useState<"all" | "selection">("all");
   const [error, setError] = useState<string | null>(null);
   const [savedContent, setSavedContent] = useState<string | null>(null);
   const [draftContent, setDraftContent] = useState<string | null>(null);
@@ -279,6 +305,12 @@ function App() {
   );
   const searchInputRef = useRef<HTMLInputElement>(null);
   const isDirty = savedContent !== null && draftContent !== null && savedContent !== draftContent;
+
+  const appendRuntimeLog = useCallback((stream: RuntimeLogStream, line: string) => {
+    setRuntimeLogs((logs) =>
+      [...logs, { id: Date.now() + Math.random(), stream, line }].slice(-maxRuntimeLogs),
+    );
+  }, []);
 
   const applyDraftEdit = useCallback(
     (edit: DraftEditResult, selectedNodeId: string | null, selectedEdgeId: string | null = null) => {
@@ -516,12 +548,79 @@ function App() {
     invoke<ProcessorDescriptor[]>("list_processor_descriptors")
       .then(setProcessorDescriptors)
       .catch(() => setProcessorDescriptors([]));
+    invoke<string>("pipeline_runtime_state")
+      .then((state) => setRuntimeState(state === "running" ? "running" : "idle"))
+      .catch(() => setRuntimeState("idle"));
     loadGraph(initialConfigPath);
   }, [loadGraph]);
 
   useEffect(() => {
     void refreshWorkspaceConfigs(workspacePath);
   }, [refreshWorkspaceConfigs, workspacePath]);
+
+  useEffect(() => {
+    let disposed = false;
+    const unlistenLog = listen<PipelineLogEvent>("pipeline://log", (event) => {
+      if (!disposed) {
+        appendRuntimeLog(event.payload.stream, event.payload.line);
+      }
+    });
+    const unlistenState = listen<PipelineStateEvent>("pipeline://state", (event) => {
+      if (disposed) {
+        return;
+      }
+
+      setRuntimeState(event.payload.state === "running" ? "running" : "idle");
+      if (event.payload.message) {
+        appendRuntimeLog("system", event.payload.message);
+      }
+    });
+
+    return () => {
+      disposed = true;
+      void unlistenLog.then((unlisten) => unlisten());
+      void unlistenState.then((unlisten) => unlisten());
+    };
+  }, [appendRuntimeLog]);
+
+  const startRuntime = useCallback(async () => {
+    if (isDirty) {
+      setError("Save or revert the current draft before running the pipeline.");
+      appendRuntimeLog("system", "Run blocked: save or revert the current draft first.");
+      return;
+    }
+
+    setRuntimeState("starting");
+    setError(null);
+    setRuntimeLogs([]);
+    appendRuntimeLog("system", `Starting pipeline from ${configPath}`);
+
+    try {
+      await invoke("start_pipeline", { path: configPath });
+    } catch (caught) {
+      const message = String(caught);
+      setRuntimeState("error");
+      setError(message);
+      appendRuntimeLog("system", message);
+    }
+  }, [appendRuntimeLog, configPath, isDirty]);
+
+  const stopRuntime = useCallback(async () => {
+    setRuntimeState("stopping");
+    appendRuntimeLog("system", "Stopping pipeline...");
+
+    try {
+      await invoke("stop_pipeline");
+    } catch (caught) {
+      const message = String(caught);
+      setRuntimeState("error");
+      setError(message);
+      appendRuntimeLog("system", message);
+    }
+  }, [appendRuntimeLog]);
+
+  const selectedRuntimeNode =
+    selectedNodeId && graph ? graph.nodes.find((node) => node.id === selectedNodeId) ?? null : null;
   const selectNode = useCallback((id: string | null) => {
     setSelectedNodeId(id);
     setSelectedChannelName(null);
@@ -1083,8 +1182,17 @@ function App() {
             onConnectNodes={connectGraphNodes}
             onDisconnectEdge={disconnectGraphEdge}
             onDeleteNode={deleteGraphNode}
+            onStartRuntime={startRuntime}
+            onStopRuntime={stopRuntime}
             error={error}
             loadState={loadState}
+            runtimeState={runtimeState}
+            runtimeLogs={runtimeLogs}
+            runtimeLogFilter={runtimeLogFilter}
+            selectedRuntimeNode={selectedRuntimeNode}
+            selectedRuntimeChannelName={selectedChannelName}
+            onRuntimeLogFilterChange={setRuntimeLogFilter}
+            onClearRuntimeLogs={() => setRuntimeLogs([])}
           />
         </main>
 
@@ -3160,6 +3268,92 @@ function DiagnosticsList({
   );
 }
 
+function RuntimeConsole({
+  logs,
+  state,
+  filter,
+  selectedNode,
+  selectedChannelName,
+  onFilterChange,
+  onClear,
+}: {
+  logs: RuntimeLogEntry[];
+  state: RuntimeState;
+  filter: "all" | "selection";
+  selectedNode: GraphNode | null;
+  selectedChannelName: string | null;
+  onFilterChange: (filter: "all" | "selection") => void;
+  onClear: () => void;
+}) {
+  const selectionTokens = runtimeSelectionTokens(selectedNode, selectedChannelName);
+  const filteredLogs =
+    filter === "selection" && selectionTokens.length > 0
+      ? logs.filter((entry) =>
+          selectionTokens.some((token) => entry.line.toLowerCase().includes(token.toLowerCase())),
+        )
+      : logs;
+  const stateLabel =
+    state === "starting"
+      ? "Starting"
+      : state === "running"
+        ? "Running"
+        : state === "stopping"
+          ? "Stopping"
+          : state === "error"
+            ? "Error"
+            : "Idle";
+  const selectionLabel = selectedChannelName ?? selectedNode?.display_name ?? "No selection";
+
+  return (
+    <section className="runtime-console">
+      <div className="runtime-console-header">
+        <div className="runtime-console-title">
+          <Terminal size={15} />
+          <span>Console</span>
+          <strong className={`runtime-state ${state}`}>{stateLabel}</strong>
+        </div>
+        <div className="runtime-console-actions">
+          <div className="runtime-filter" role="group" aria-label="Console filter">
+            <button
+              className={filter === "all" ? "active" : ""}
+              onClick={() => onFilterChange("all")}
+            >
+              All
+            </button>
+            <button
+              className={filter === "selection" ? "active" : ""}
+              onClick={() => onFilterChange("selection")}
+              disabled={selectionTokens.length === 0}
+              title={selectionLabel}
+            >
+              Selection
+            </button>
+          </div>
+          <button className="runtime-clear" onClick={onClear} disabled={logs.length === 0}>
+            Clear
+          </button>
+        </div>
+      </div>
+      <div className="runtime-log-list">
+        {filteredLogs.length === 0 ? (
+          <p className="runtime-empty">
+            {filter === "selection" && selectionTokens.length > 0
+              ? `No console lines match ${selectionLabel}.`
+              : "Run the pipeline to stream output here."}
+          </p>
+        ) : (
+          filteredLogs.map((entry) => (
+            <div className={`runtime-log-line ${entry.stream}`} key={entry.id}>
+              <span>{entry.stream}</span>
+              <code>{entry.line}</code>
+            </div>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
 function GraphCanvas({
   graph,
   configPath,
@@ -3174,8 +3368,17 @@ function GraphCanvas({
   onConnectNodes,
   onDisconnectEdge,
   onDeleteNode,
+  onStartRuntime,
+  onStopRuntime,
   error,
   loadState,
+  runtimeState,
+  runtimeLogs,
+  runtimeLogFilter,
+  selectedRuntimeNode,
+  selectedRuntimeChannelName,
+  onRuntimeLogFilterChange,
+  onClearRuntimeLogs,
 }: {
   graph: ResolvedPipelineGraph | null;
   configPath: string;
@@ -3190,8 +3393,17 @@ function GraphCanvas({
   onConnectNodes: (sourceNodeId: string, targetNodeId: string) => Promise<void>;
   onDisconnectEdge: (targetNodeId: string, channelName: string) => Promise<void>;
   onDeleteNode: (nodeId: string) => Promise<void>;
+  onStartRuntime: () => Promise<void>;
+  onStopRuntime: () => Promise<void>;
   error: string | null;
   loadState: "idle" | "loading" | "error";
+  runtimeState: RuntimeState;
+  runtimeLogs: RuntimeLogEntry[];
+  runtimeLogFilter: "all" | "selection";
+  selectedRuntimeNode: GraphNode | null;
+  selectedRuntimeChannelName: string | null;
+  onRuntimeLogFilterChange: (filter: "all" | "selection") => void;
+  onClearRuntimeLogs: () => void;
 }) {
   const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
   const [layoutRevision, setLayoutRevision] = useState(0);
@@ -3399,6 +3611,19 @@ function GraphCanvas({
       <LaneLabels graph={graph} />
       <div className="layout-toolbar">
         <button
+          className={runtimeState === "running" ? "runtime-button running" : "runtime-button"}
+          onClick={runtimeState === "running" || runtimeState === "stopping" ? onStopRuntime : onStartRuntime}
+          disabled={runtimeState === "starting" || runtimeState === "stopping"}
+          title={runtimeState === "running" ? "Stop pipeline" : "Run pipeline"}
+          aria-label={runtimeState === "running" ? "Stop pipeline" : "Run pipeline"}
+        >
+          {runtimeState === "running" || runtimeState === "stopping" ? (
+            <Square size={15} />
+          ) : (
+            <Play size={15} />
+          )}
+        </button>
+        <button
           onClick={() => {
             clearStoredLayout(configPath);
             setNodes(automaticFlowNodes(flowNodes, graph.nodes));
@@ -3410,6 +3635,15 @@ function GraphCanvas({
           <RotateCcw size={15} />
         </button>
       </div>
+      <RuntimeConsole
+        logs={runtimeLogs}
+        state={runtimeState}
+        filter={runtimeLogFilter}
+        selectedNode={selectedRuntimeNode}
+        selectedChannelName={selectedRuntimeChannelName}
+        onFilterChange={onRuntimeLogFilterChange}
+        onClear={onClearRuntimeLogs}
+      />
       <div className="flow-area">
         <ReactFlow
           nodes={nodes}
@@ -4387,6 +4621,26 @@ function normalizeComparablePath(path: string) {
 function pathMatchesAny(path: string, paths: string[]) {
   const normalizedPath = normalizeComparablePath(path);
   return paths.some((candidate) => normalizeComparablePath(candidate) === normalizedPath);
+}
+
+function runtimeSelectionTokens(selectedNode: GraphNode | null, selectedChannelName: string | null) {
+  const tokens = new Set<string>();
+
+  if (selectedChannelName) {
+    tokens.add(selectedChannelName);
+  }
+
+  if (selectedNode) {
+    tokens.add(selectedNode.id);
+    tokens.add(selectedNode.display_name);
+    tokens.add(selectedNode.config_path);
+    selectedNode.input_channels.forEach((channelName) => tokens.add(channelName));
+    if (selectedNode.output_channel) {
+      tokens.add(selectedNode.output_channel);
+    }
+  }
+
+  return [...tokens].filter((token) => token.trim().length > 0);
 }
 
 function isTextEditingTarget(target: EventTarget | null) {

@@ -1953,6 +1953,187 @@ button {
   background: #132325;
 }
 
+.layout-toolbar button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.layout-toolbar .runtime-button {
+  width: auto;
+  min-width: 34px;
+  border-color: #2d6564;
+  color: #7beade;
+}
+
+.layout-toolbar .runtime-button.running {
+  border-color: #8b7131;
+  color: #f0c46c;
+  background: #18170f;
+}
+
+.runtime-console {
+  position: absolute;
+  z-index: 23;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  display: flex;
+  width: min(760px, calc(100% - 32px));
+  max-height: min(260px, calc(100% - 96px));
+  min-height: 154px;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #22383c;
+  border-radius: 8px;
+  background: rgba(8, 13, 15, 0.94);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.34);
+}
+
+.runtime-console-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid #1d2b2f;
+}
+
+.runtime-console-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+  color: #eef7f5;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.runtime-state {
+  padding: 2px 7px;
+  border: 1px solid #2a4448;
+  border-radius: 999px;
+  color: #8ea29e;
+  font-size: 10px;
+  line-height: 1.2;
+  background: #10191b;
+}
+
+.runtime-state.running {
+  border-color: #2d6564;
+  color: #7beade;
+  background: #10201f;
+}
+
+.runtime-state.starting,
+.runtime-state.stopping {
+  border-color: #8b7131;
+  color: #f0c46c;
+  background: #18170f;
+}
+
+.runtime-state.error {
+  border-color: #85423f;
+  color: #ffb4ad;
+  background: #1b1313;
+}
+
+.runtime-console-actions {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 8px;
+}
+
+.runtime-filter {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-width: 148px;
+  overflow: hidden;
+  border: 1px solid #263b40;
+  border-radius: 7px;
+}
+
+.runtime-filter button,
+.runtime-clear {
+  height: 28px;
+  padding: 0 9px;
+  border: 0;
+  color: #9fb4b0;
+  font-size: 10px;
+  font-weight: 900;
+  background: #0e1517;
+}
+
+.runtime-filter button + button {
+  border-left: 1px solid #263b40;
+}
+
+.runtime-filter button.active {
+  color: #f0fffc;
+  background: #132325;
+}
+
+.runtime-filter button:disabled,
+.runtime-clear:disabled {
+  cursor: not-allowed;
+  color: #61716e;
+}
+
+.runtime-clear {
+  border: 1px solid #263b40;
+  border-radius: 7px;
+}
+
+.runtime-log-list {
+  display: flex;
+  flex: 1 1 auto;
+  min-height: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 12px;
+  overflow: auto;
+}
+
+.runtime-log-line {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 8px;
+  align-items: start;
+  color: #c7d8d4;
+  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.runtime-log-line span {
+  color: #708782;
+  text-transform: uppercase;
+}
+
+.runtime-log-line.stderr span {
+  color: #f0c46c;
+}
+
+.runtime-log-line.system span {
+  color: #7beade;
+}
+
+.runtime-log-line code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: inherit;
+  font-family: inherit;
+}
+
+.runtime-empty {
+  margin: auto;
+  color: #829893;
+  font-size: 12px;
+  text-align: center;
+}
+
 .flow-area {
   width: 100%;
   height: 100%;

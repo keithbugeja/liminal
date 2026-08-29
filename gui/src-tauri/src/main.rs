@@ -4,14 +4,35 @@ use liminal::processors::descriptor::{
 };
 use serde::Serialize;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex as StdMutex};
+use tauri::{Emitter, State};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
+
+#[derive(Clone, Default)]
+struct PipelineRuntime {
+    process_id: Arc<StdMutex<Option<u32>>>,
+}
 
 #[derive(Serialize)]
 struct DraftEditResult {
     graph: ResolvedPipelineGraph,
     content: String,
+}
+
+#[derive(Clone, Serialize)]
+struct PipelineLogEvent {
+    stream: String,
+    line: String,
+}
+
+#[derive(Clone, Serialize)]
+struct PipelineStateEvent {
+    state: String,
+    message: Option<String>,
 }
 
 #[tauri::command]
@@ -67,6 +88,106 @@ fn copy_config_to_workspace(
 ) -> Result<String, String> {
     let target_path = copy_config_to_workspace_path(&workspace_path, &source_path, &content)?;
     Ok(relative_to_repo(&target_path))
+}
+
+#[tauri::command]
+fn start_pipeline(
+    window: tauri::Window,
+    runtime: State<'_, PipelineRuntime>,
+    path: String,
+) -> Result<(), String> {
+    let resolved_path = resolve_config_path(&path)?;
+    let config = load_config(&resolved_path)
+        .map_err(|error| format!("Failed to load '{}': {}", resolved_path.display(), error))?;
+    liminal::config::validate_config(&config)
+        .map_err(|error| format!("Configuration error: {}", error))?;
+
+    {
+        let running_process = runtime
+            .process_id
+            .lock()
+            .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+        if running_process.is_some() {
+            return Err("A pipeline is already running.".to_string());
+        }
+    }
+
+    let mut command = pipeline_command(&resolved_path);
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to start pipeline: {}", error))?;
+
+    let process_id = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    {
+        let mut running_process = runtime
+            .process_id
+            .lock()
+            .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+        *running_process = Some(process_id);
+    }
+
+    emit_pipeline_state(&window, "running", Some(format!("Started process {}", process_id)));
+
+    if let Some(stdout) = stdout {
+        spawn_pipeline_log_reader(window.clone(), "stdout", stdout);
+    }
+
+    if let Some(stderr) = stderr {
+        spawn_pipeline_log_reader(window.clone(), "stderr", stderr);
+    }
+
+    let runtime_process_id = runtime.process_id.clone();
+    std::thread::spawn(move || {
+        let exit_result = child.wait();
+        if let Ok(mut running_process) = runtime_process_id.lock() {
+            if *running_process == Some(process_id) {
+                *running_process = None;
+            }
+        }
+
+        let message = match exit_result {
+            Ok(status) => Some(format!("Pipeline exited with status {}", status)),
+            Err(error) => Some(format!("Failed while waiting for pipeline: {}", error)),
+        };
+        emit_pipeline_state(&window, "stopped", message);
+    });
+
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_pipeline(runtime: State<'_, PipelineRuntime>) -> Result<(), String> {
+    let process_id = {
+        let mut running_process = runtime
+            .process_id
+            .lock()
+            .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+        running_process.take()
+    };
+
+    let Some(process_id) = process_id else {
+        return Ok(());
+    };
+
+    terminate_process(process_id)
+}
+
+#[tauri::command]
+fn pipeline_runtime_state(runtime: State<'_, PipelineRuntime>) -> Result<String, String> {
+    let running_process = runtime
+        .process_id
+        .lock()
+        .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+    Ok(if running_process.is_some() {
+        "running".to_string()
+    } else {
+        "idle".to_string()
+    })
 }
 
 #[tauri::command]
@@ -577,6 +698,97 @@ fn writable_directory_path(path: &str) -> Result<PathBuf, String> {
     };
 
     Ok(resolved_path)
+}
+
+fn pipeline_command(config_path: &Path) -> Command {
+    let mut command = if let Ok(binary_path) = std::env::var("LIMINAL_BIN") {
+        Command::new(binary_path)
+    } else {
+        let candidate = repo_root()
+            .join("target")
+            .join("debug")
+            .join(if cfg!(windows) { "liminal.exe" } else { "liminal" });
+
+        if candidate.exists() {
+            Command::new(candidate)
+        } else {
+            let mut cargo = Command::new("cargo");
+            cargo
+                .arg("run")
+                .arg("--quiet")
+                .arg("--manifest-path")
+                .arg(repo_root().join("Cargo.toml"))
+                .arg("--");
+            cargo
+        }
+    };
+
+    command.arg("--config").arg(config_path);
+    command.current_dir(repo_root());
+    command
+}
+
+fn spawn_pipeline_log_reader<R>(window: tauri::Window, stream: &str, reader: R)
+where
+    R: std::io::Read + Send + 'static,
+{
+    let stream = stream.to_string();
+    std::thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let _ = window.emit(
+                "pipeline://log",
+                PipelineLogEvent {
+                    stream: stream.clone(),
+                    line,
+                },
+            );
+        }
+    });
+}
+
+fn emit_pipeline_state(window: &tauri::Window, state: &str, message: Option<String>) {
+    let _ = window.emit(
+        "pipeline://state",
+        PipelineStateEvent {
+            state: state.to_string(),
+            message,
+        },
+    );
+}
+
+fn terminate_process(process_id: u32) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .arg("/PID")
+            .arg(process_id.to_string())
+            .arg("/T")
+            .arg("/F")
+            .status()
+            .map_err(|error| format!("Failed to stop pipeline: {}", error))?;
+
+        if !status.success() {
+            return Err(format!("Failed to stop pipeline process {}", process_id));
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .arg("-TERM")
+            .arg(process_id.to_string())
+            .status()
+            .map_err(|error| format!("Failed to stop pipeline: {}", error))?;
+
+        if !status.success() {
+            return Err(format!("Failed to stop pipeline process {}", process_id));
+        }
+    }
+
+    Ok(())
 }
 
 fn dialog_path_to_string(path: FilePath) -> Result<String, String> {
@@ -1410,12 +1622,16 @@ fn set_existing_scalar_value(existing: &mut Value, value: &str) -> Result<(), St
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(PipelineRuntime::default())
         .invoke_handler(tauri::generate_handler![
             load_graph,
             load_config_text,
             save_config_text,
             save_config_as,
             copy_config_to_workspace,
+            start_pipeline,
+            stop_pipeline,
+            pipeline_runtime_state,
             list_workspace_configs,
             pick_config_file,
             pick_workspace_folder,
