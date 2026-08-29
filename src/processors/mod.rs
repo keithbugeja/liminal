@@ -1,4 +1,5 @@
 pub mod common;
+pub mod descriptor;
 pub mod factory;
 pub mod processor;
 

@@ -5,6 +5,9 @@ authors = ["Keith Bugeja <keith.bugeja@um.edu.mt>"]
 description = "A framework for building data processing pipelines"
 edition = "2024"
 
+[lib]
+doctest = false
+
 [dependencies]
 toml = "0.9.3"
 serde = { version = "1.0.130", features = ["derive"] }

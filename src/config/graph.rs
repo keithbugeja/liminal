@@ -4,7 +4,7 @@
 //! from/to node references. This module materialises those implicit references
 //! into a graph shape that a GUI can render and validate.
 
-use crate::config::types::{ChannelConfig, ChannelType, Config, StageConfig};
+use crate::config::types::{ChannelConfig, ChannelType, ConcurrencyType, Config, StageConfig};
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 
@@ -30,6 +30,18 @@ pub struct GraphNode {
     pub processor_type: String,
     pub input_channels: Vec<String>,
     pub output_channel: Option<String>,
+    pub parameters: Vec<GraphParameter>,
+    pub timing: Vec<GraphParameter>,
+    pub concurrency_type: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct GraphParameter {
+    pub key: String,
+    pub value: String,
+    pub raw_value: serde_json::Value,
+    pub value_kind: String,
+    pub editable: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -264,7 +276,130 @@ fn graph_node(
         processor_type: stage_config.r#type.clone(),
         input_channels: stage_config.inputs.clone().unwrap_or_default(),
         output_channel: stage_config.output.clone(),
+        parameters: graph_parameters(stage_config),
+        timing: graph_timing(stage_config),
+        concurrency_type: stage_config
+            .concurrency
+            .as_ref()
+            .map(|concurrency| concurrency_type_name(&concurrency.r#type).to_string())
+            .unwrap_or_else(|| "thread".to_string()),
     }
+}
+
+fn graph_parameters(stage_config: &StageConfig) -> Vec<GraphParameter> {
+    let mut parameters: Vec<_> = stage_config
+        .parameters
+        .as_ref()
+        .map(|parameters| {
+            parameters
+                .iter()
+                .map(|(key, value)| GraphParameter {
+                    key: key.clone(),
+                    value: parameter_display_value(value),
+                    raw_value: value.clone(),
+                    value_kind: parameter_value_kind(value).to_string(),
+                    editable: matches!(
+                        value,
+                        serde_json::Value::String(_)
+                            | serde_json::Value::Number(_)
+                            | serde_json::Value::Bool(_)
+                    ),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    parameters.sort_by(|a, b| a.key.cmp(&b.key));
+    parameters
+}
+
+fn parameter_display_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::String(value) => value.clone(),
+        serde_json::Value::Number(value) => value.to_string(),
+        serde_json::Value::Bool(value) => value.to_string(),
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+            serde_json::to_string_pretty(value).unwrap_or_else(|_| value.to_string())
+        }
+    }
+}
+
+fn parameter_value_kind(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::Bool(_) => "boolean",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+        serde_json::Value::Null => "null",
+    }
+}
+
+fn graph_timing(stage_config: &StageConfig) -> Vec<GraphParameter> {
+    let Some(timing) = &stage_config.timing else {
+        return Vec::new();
+    };
+
+    let mut fields = vec![
+        GraphParameter {
+            key: "max_lateness_ms".to_string(),
+            value: timing.max_lateness_ms.to_string(),
+            raw_value: serde_json::json!(timing.max_lateness_ms),
+            value_kind: "number".to_string(),
+            editable: true,
+        },
+        GraphParameter {
+            key: "metrics_enabled".to_string(),
+            value: timing.metrics_enabled.to_string(),
+            raw_value: serde_json::json!(timing.metrics_enabled),
+            value_kind: "boolean".to_string(),
+            editable: true,
+        },
+    ];
+
+    if let Some(event_time_field) = &timing.event_time_field {
+        fields.push(GraphParameter {
+            key: "event_time_field".to_string(),
+            value: event_time_field.clone(),
+            raw_value: serde_json::json!(event_time_field),
+            value_kind: "string".to_string(),
+            editable: true,
+        });
+    }
+
+    if let Some(processing_timeout_ms) = timing.processing_timeout_ms {
+        fields.push(GraphParameter {
+            key: "processing_timeout_ms".to_string(),
+            value: processing_timeout_ms.to_string(),
+            raw_value: serde_json::json!(processing_timeout_ms),
+            value_kind: "number".to_string(),
+            editable: true,
+        });
+    }
+
+    if let Some(jitter_bounds_ms) = timing.jitter_bounds_ms {
+        fields.push(GraphParameter {
+            key: "jitter_bounds_ms".to_string(),
+            value: jitter_bounds_ms.to_string(),
+            raw_value: serde_json::json!(jitter_bounds_ms),
+            value_kind: "number".to_string(),
+            editable: true,
+        });
+    }
+
+    if timing.watermark_strategy.is_some() {
+        fields.push(GraphParameter {
+            key: "watermark_strategy".to_string(),
+            value: "configured".to_string(),
+            raw_value: serde_json::json!({ "configured": true }),
+            value_kind: "object".to_string(),
+            editable: false,
+        });
+    }
+
+    fields.sort_by(|a, b| a.key.cmp(&b.key));
+    fields
 }
 
 fn collect_producers(nodes: &[GraphNode], config: &Config) -> HashMap<String, Vec<Producer>> {
@@ -568,6 +703,14 @@ fn channel_type_name(channel_type: &ChannelType) -> &'static str {
         ChannelType::Direct => "direct",
         ChannelType::Shared => "shared",
         ChannelType::Fanout => "fanout",
+    }
+}
+
+fn concurrency_type_name(concurrency_type: &ConcurrencyType) -> &'static str {
+    match concurrency_type {
+        ConcurrencyType::Thread => "thread",
+        ConcurrencyType::Pipeline => "pipeline",
+        ConcurrencyType::Owner => "owner",
     }
 }
 

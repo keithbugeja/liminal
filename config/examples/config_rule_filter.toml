@@ -32,6 +32,11 @@ else_actions = [
     { type = "drop_message" }
 ]
 
+[pipelines.default_pipeline]
+description = "default_pipeline pipeline"
+
+[pipelines.default_pipeline.stages]
+
 # Output: Console log for filtered messages
 [outputs.filtered_log]
 type = "console"
