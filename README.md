@@ -369,6 +369,60 @@ if self.timing.should_drop_message(&message) {
 }
 ```
 
+## Liminal GUI
+
+```markdown
+![Liminal GUI](docs/images/liminal-gui.png)
+```
+
+Liminal also includes a desktop GUI for designing, inspecting, editing, and running
+pipeline configurations. The GUI is built with Tauri and React, while the pipeline
+model, TOML editing, validation, and runtime integration are handled by Rust.
+
+The GUI keeps TOML as the source of truth. It can open existing configuration files,
+create new empty TOML configs, edit processor parameters, add and remove nodes, rewire
+channels, save or save-as without unnecessary TOML churn, and inspect graph diagnostics
+visually.
+
+### GUI Features
+
+- Graph view for inputs, pipeline stages, outputs, channels, and diagnostics
+- CyberEther-inspired node and edge styling with readable channel labels
+- Format-preserving edits using `toml_edit`
+- Generated node palette and parameter forms from processor descriptors
+- Native file open, folder open, save, save-as, recent files, and workspace browsing
+- Layout persistence per config file
+- Run/stop controls for launching the active saved pipeline
+- In-app runtime console with stdout/stderr streaming and selection-based filtering
+- Lightweight node, channel, and edge activity indicators from recent runtime output
+
+### Running the GUI
+
+From the repository root:
+
+```bash
+cd gui
+npm install
+npm run tauri dev
+```
+
+For a production build:
+
+```bash
+cd gui
+npm run tauri build
+```
+
+During development, the GUI starts the Liminal runtime by using
+`target/debug/liminal.exe` when it exists, or by falling back to `cargo run`. Build the
+runtime first if you want startup to avoid the Cargo fallback:
+
+```bash
+cargo build
+```
+
+You can also set `LIMINAL_BIN` to point the GUI at a specific Liminal executable.
+
 ## Citation
 
 If you use this framework in academic work (papers, theses, or technical reports), please cite it using the following reference.
