@@ -161,6 +161,50 @@ button {
   overflow: auto;
 }
 
+.example-list.compact {
+  max-height: 126px;
+}
+
+.recent-configs {
+  display: grid;
+  gap: 8px;
+}
+
+.sidebar-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: #9fb4b0;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.sidebar-section-title div {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+}
+
+.sidebar-section-title button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #263b40;
+  border-radius: 6px;
+  color: #92a9a5;
+  font-size: 10px;
+  font-weight: 900;
+  background: #0e1517;
+}
+
+.sidebar-section-title button:hover {
+  border-color: #5ebcaf;
+  color: #eef8f5;
+  background: #132325;
+}
+
 .example {
   min-height: 30px;
   padding: 6px 10px;

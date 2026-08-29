@@ -28,6 +28,7 @@ import {
   CircleDot,
   FileJson,
   GitBranch,
+  History,
   Info,
   Loader2,
   Network,
@@ -208,6 +209,8 @@ const minInspectorWidth = 330;
 const maxInspectorWidth = 980;
 const inspectorWidthStorageKey = "liminal.inspectorWidth";
 const layoutStoragePrefix = "liminal.layout.";
+const recentConfigsStorageKey = "liminal.recentConfigs";
+const maxRecentConfigs = 6;
 const conditionOperationOptions = [
   "equals",
   "not_equals",
@@ -226,6 +229,7 @@ const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "
 function App() {
   const [configPath, setConfigPath] = useState(initialConfigPath);
   const [exampleConfigs, setExampleConfigs] = useState<string[]>([]);
+  const [recentConfigPaths, setRecentConfigPaths] = useState<string[]>(readStoredRecentConfigs);
   const [processorDescriptors, setProcessorDescriptors] = useState<ProcessorDescriptor[]>([]);
   const [graph, setGraph] = useState<ResolvedPipelineGraph | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -272,6 +276,7 @@ function App() {
       setSelectedDiagnosticKey(null);
       setLoadState("idle");
       setSaveState("idle");
+      setRecentConfigPaths(writeStoredRecentConfig(path));
     } catch (caught) {
       setGraph(null);
       setSavedContent(null);
@@ -676,6 +681,16 @@ function App() {
             </button>
           </div>
 
+          <RecentConfigsPanel
+            configPath={configPath}
+            recentConfigPaths={recentConfigPaths}
+            onLoad={(path) => {
+              setConfigPath(path);
+              loadGraph(path);
+            }}
+            onClear={() => setRecentConfigPaths(clearStoredRecentConfigs())}
+          />
+
           <div className="example-list">
             {exampleConfigs.map((path) => (
               <button
@@ -838,6 +853,46 @@ function Metric({ label, value }: { label: string; value: number }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function RecentConfigsPanel({
+  configPath,
+  recentConfigPaths,
+  onLoad,
+  onClear,
+}: {
+  configPath: string;
+  recentConfigPaths: string[];
+  onLoad: (path: string) => void;
+  onClear: () => void;
+}) {
+  if (recentConfigPaths.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="recent-configs">
+      <div className="sidebar-section-title">
+        <div>
+          <History size={14} />
+          <span>Recent</span>
+        </div>
+        <button onClick={onClear}>Clear</button>
+      </div>
+      <div className="example-list compact">
+        {recentConfigPaths.map((path) => (
+          <button
+            key={path}
+            className={path === configPath ? "example active" : "example"}
+            onClick={() => onLoad(path)}
+            title={path}
+          >
+            {path}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -3776,6 +3831,46 @@ function readStoredInspectorWidth() {
 
 function clampInspectorWidth(width: number) {
   return Math.min(Math.max(Math.round(width), minInspectorWidth), maxInspectorWidth);
+}
+
+function readStoredRecentConfigs() {
+  try {
+    const storedRecentConfigs = window.localStorage.getItem(recentConfigsStorageKey);
+    if (!storedRecentConfigs) {
+      return [];
+    }
+
+    const parsedRecentConfigs = JSON.parse(storedRecentConfigs);
+    if (!Array.isArray(parsedRecentConfigs)) {
+      return [];
+    }
+
+    return parsedRecentConfigs
+      .filter((path): path is string => typeof path === "string" && path.trim().length > 0)
+      .slice(0, maxRecentConfigs);
+  } catch {
+    return [];
+  }
+}
+
+function writeStoredRecentConfig(path: string) {
+  const normalizedPath = path.trim();
+  if (!normalizedPath) {
+    return readStoredRecentConfigs();
+  }
+
+  const recentConfigs = [
+    normalizedPath,
+    ...readStoredRecentConfigs().filter((recentPath) => recentPath !== normalizedPath),
+  ].slice(0, maxRecentConfigs);
+
+  window.localStorage.setItem(recentConfigsStorageKey, JSON.stringify(recentConfigs));
+  return recentConfigs;
+}
+
+function clearStoredRecentConfigs() {
+  window.localStorage.removeItem(recentConfigsStorageKey);
+  return [];
 }
 
 function readStoredLayout(configPath: string): Record<string, LayoutPosition> {
