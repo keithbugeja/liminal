@@ -26,12 +26,18 @@ import {
   AlertTriangle,
   Boxes,
   CircleDot,
+  Copy,
   FileJson,
+  FolderOpen,
   GitBranch,
   History,
   Info,
   Loader2,
   Network,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   Plus,
   RefreshCw,
   RotateCcw,
@@ -184,6 +190,13 @@ type PendingDelete = {
   impact: DeleteImpact;
 };
 
+type PendingDiscardAction = {
+  title: string;
+  detail: string;
+  confirmLabel: string;
+  run: () => void | Promise<void>;
+};
+
 type ValidationIssue = {
   path: string;
   message: string;
@@ -210,6 +223,11 @@ const maxInspectorWidth = 980;
 const inspectorWidthStorageKey = "liminal.inspectorWidth";
 const layoutStoragePrefix = "liminal.layout.";
 const recentConfigsStorageKey = "liminal.recentConfigs";
+const workspacePathStorageKey = "liminal.workspacePath";
+const showExamplesStorageKey = "liminal.showExamples";
+const fileSidebarCollapsedStorageKey = "liminal.fileSidebarCollapsed";
+const toolsSidebarCollapsedStorageKey = "liminal.toolsSidebarCollapsed";
+const inspectorCollapsedStorageKey = "liminal.inspectorCollapsed";
 const maxRecentConfigs = 6;
 const conditionOperationOptions = [
   "equals",
@@ -228,8 +246,12 @@ const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "
 
 function App() {
   const [configPath, setConfigPath] = useState(initialConfigPath);
+  const [loadedConfigPath, setLoadedConfigPath] = useState<string | null>(null);
   const [exampleConfigs, setExampleConfigs] = useState<string[]>([]);
   const [recentConfigPaths, setRecentConfigPaths] = useState<string[]>(readStoredRecentConfigs);
+  const [workspacePath, setWorkspacePath] = useState(readStoredWorkspacePath);
+  const [workspaceConfigs, setWorkspaceConfigs] = useState<string[]>([]);
+  const [showExamples, setShowExamples] = useState(readStoredShowExamples);
   const [processorDescriptors, setProcessorDescriptors] = useState<ProcessorDescriptor[]>([]);
   const [graph, setGraph] = useState<ResolvedPipelineGraph | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -245,6 +267,17 @@ function App() {
   const [draftContent, setDraftContent] = useState<string | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(readStoredInspectorWidth);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const [pendingDiscardAction, setPendingDiscardAction] = useState<PendingDiscardAction | null>(null);
+  const [fileSidebarCollapsed, setFileSidebarCollapsed] = useState(() =>
+    readStoredCollapsedState(fileSidebarCollapsedStorageKey),
+  );
+  const [toolsSidebarCollapsed, setToolsSidebarCollapsed] = useState(() =>
+    readStoredCollapsedState(toolsSidebarCollapsedStorageKey),
+  );
+  const [inspectorCollapsed, setInspectorCollapsed] = useState(() =>
+    readStoredCollapsedState(inspectorCollapsedStorageKey),
+  );
+  const searchInputRef = useRef<HTMLInputElement>(null);
   const isDirty = savedContent !== null && draftContent !== null && savedContent !== draftContent;
 
   const applyDraftEdit = useCallback(
@@ -267,6 +300,8 @@ function App() {
     try {
       const nextContent = await invoke<string>("load_config_text", { path });
       const nextGraph = await invoke<ResolvedPipelineGraph>("load_graph", { path });
+      setConfigPath(path);
+      setLoadedConfigPath(path);
       setGraph(nextGraph);
       setSavedContent(nextContent);
       setDraftContent(nextContent);
@@ -279,6 +314,7 @@ function App() {
       setRecentConfigPaths(writeStoredRecentConfig(path));
     } catch (caught) {
       setGraph(null);
+      setLoadedConfigPath(null);
       setSavedContent(null);
       setDraftContent(null);
       setSelectedNodeId(null);
@@ -291,6 +327,188 @@ function App() {
     }
   }, []);
 
+  const refreshWorkspaceConfigs = useCallback(async (path: string) => {
+    if (!path) {
+      setWorkspaceConfigs([]);
+      return;
+    }
+
+    try {
+      setWorkspaceConfigs(await invoke<string[]>("list_workspace_configs", { path }));
+    } catch (caught) {
+      setWorkspaceConfigs([]);
+      setError(String(caught));
+    }
+  }, []);
+
+  const requestDiscardOrRun = useCallback(
+    (action: PendingDiscardAction) => {
+      if (!isDirty) {
+        void action.run();
+        return;
+      }
+
+      setPendingDiscardAction(action);
+    },
+    [isDirty],
+  );
+
+  const openConfigPath = useCallback(
+    (path: string) => {
+      requestDiscardOrRun({
+        title: "Open Config",
+        detail: `Discard the current unsaved draft and open ${path}?`,
+        confirmLabel: "Discard and Open",
+        run: () => {
+          setConfigPath(path);
+          loadGraph(path);
+        },
+      });
+    },
+    [loadGraph, requestDiscardOrRun],
+  );
+
+  const chooseConfigFile = useCallback(async () => {
+    let selectedPath: string | null;
+    try {
+      selectedPath = await invoke<string | null>("pick_config_file");
+    } catch (caught) {
+      setError(String(caught));
+      setLoadState("error");
+      return;
+    }
+
+    if (typeof selectedPath !== "string") {
+      return;
+    }
+
+    setConfigPath(selectedPath);
+    loadGraph(selectedPath);
+  }, [loadGraph]);
+
+  const openConfigFile = useCallback(() => {
+    requestDiscardOrRun({
+      title: "Open File",
+      detail: "Discard the current unsaved draft and choose another TOML config?",
+      confirmLabel: "Discard and Choose",
+      run: chooseConfigFile,
+    });
+  }, [chooseConfigFile, requestDiscardOrRun]);
+
+  const openWorkspaceFolder = useCallback(async () => {
+    let selectedPath: string | null;
+    try {
+      selectedPath = await invoke<string | null>("pick_workspace_folder");
+    } catch (caught) {
+      setError(String(caught));
+      setLoadState("error");
+      return;
+    }
+
+    if (typeof selectedPath !== "string") {
+      return;
+    }
+
+    setWorkspacePath(selectedPath);
+    window.localStorage.setItem(workspacePathStorageKey, selectedPath);
+    await refreshWorkspaceConfigs(selectedPath);
+  }, [refreshWorkspaceConfigs]);
+
+  const reloadConfig = useCallback(() => {
+    requestDiscardOrRun({
+      title: "Reload Config",
+      detail: `Discard the current unsaved draft and reload ${configPath}?`,
+      confirmLabel: "Discard and Reload",
+      run: () => loadGraph(configPath),
+    });
+  }, [configPath, loadGraph, requestDiscardOrRun]);
+
+  const copyIntoWorkspace = useCallback(async () => {
+    if (!draftContent) {
+      setError("No editable draft is loaded.");
+      setSaveState("error");
+      return;
+    }
+
+    if (!workspacePath) {
+      setError("Choose a workspace folder before copying a config into it.");
+      setSaveState("error");
+      return;
+    }
+
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const copiedPath = await invoke<string>("copy_config_to_workspace", {
+        workspacePath,
+        sourcePath: configPath,
+        content: draftContent,
+      });
+      const nextGraph = await invoke<ResolvedPipelineGraph>("load_graph", { path: copiedPath });
+      setGraph(nextGraph);
+      setConfigPath(copiedPath);
+      setLoadedConfigPath(copiedPath);
+      setSavedContent(draftContent);
+      setRecentConfigPaths(writeStoredRecentConfig(copiedPath));
+      setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
+      setSelectedChannelName(null);
+      setSelectedEdgeId(null);
+      setSelectedDiagnosticKey(null);
+      setSaveState("idle");
+      await refreshWorkspaceConfigs(workspacePath);
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+    }
+  }, [configPath, draftContent, refreshWorkspaceConfigs, workspacePath]);
+
+  const saveDraftAs = useCallback(async () => {
+    if (!draftContent) {
+      setError("No editable draft is loaded.");
+      setSaveState("error");
+      return;
+    }
+
+    let selectedPath: string | null;
+    try {
+      selectedPath = await invoke<string | null>("pick_save_config_path", {
+        defaultPath: configPath.endsWith(".toml") ? configPath : "config.toml",
+      });
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+      return;
+    }
+
+    if (typeof selectedPath !== "string") {
+      return;
+    }
+
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const nextGraph = await invoke<ResolvedPipelineGraph>("save_config_as", {
+        path: selectedPath,
+        content: draftContent,
+      });
+      setGraph(nextGraph);
+      setConfigPath(selectedPath);
+      setLoadedConfigPath(selectedPath);
+      setSavedContent(draftContent);
+      setRecentConfigPaths(writeStoredRecentConfig(selectedPath));
+      setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
+      setSelectedChannelName(null);
+      setSelectedEdgeId(null);
+      setSelectedDiagnosticKey(null);
+      setSaveState("idle");
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+    }
+  }, [configPath, draftContent]);
+
   useEffect(() => {
     invoke<string[]>("list_example_configs")
       .then(setExampleConfigs)
@@ -300,6 +518,10 @@ function App() {
       .catch(() => setProcessorDescriptors([]));
     loadGraph(initialConfigPath);
   }, [loadGraph]);
+
+  useEffect(() => {
+    void refreshWorkspaceConfigs(workspacePath);
+  }, [refreshWorkspaceConfigs, workspacePath]);
   const selectNode = useCallback((id: string | null) => {
     setSelectedNodeId(id);
     setSelectedChannelName(null);
@@ -592,6 +814,73 @@ function App() {
 
     loadGraph(configPath);
   }, [configPath, loadGraph, savedContent]);
+
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      const key = event.key.toLowerCase();
+      const hasPrimaryModifier = event.ctrlKey || event.metaKey;
+
+      if (hasPrimaryModifier && key === "s") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          saveDraftAs();
+        } else {
+          saveDraft();
+        }
+        return;
+      }
+
+      if (hasPrimaryModifier && key === "o") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          openWorkspaceFolder();
+        } else {
+          openConfigFile();
+        }
+        return;
+      }
+
+      if (hasPrimaryModifier && key === "r") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          revertDraft();
+        } else {
+          reloadConfig();
+        }
+        return;
+      }
+
+      if (hasPrimaryModifier && key === "f") {
+        event.preventDefault();
+        searchInputRef.current?.focus();
+        searchInputRef.current?.select();
+        return;
+      }
+
+      if (key === "escape" && !isTextEditingTarget(event.target)) {
+        if (pendingDelete) {
+          setPendingDelete(null);
+        } else {
+          setSelectedNodeId(null);
+          setSelectedChannelName(null);
+          setSelectedEdgeId(null);
+          setSelectedDiagnosticKey(null);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleShortcut);
+    return () => window.removeEventListener("keydown", handleShortcut);
+  }, [
+    configPath,
+    openConfigFile,
+    openWorkspaceFolder,
+    pendingDelete,
+    reloadConfig,
+    revertDraft,
+    saveDraft,
+    saveDraftAs,
+  ]);
   const startInspectorResize = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -620,132 +909,169 @@ function App() {
     window.localStorage.setItem(inspectorWidthStorageKey, String(inspectorWidth));
   }, [inspectorWidth]);
 
+  useEffect(() => {
+    window.localStorage.setItem(showExamplesStorageKey, String(showExamples));
+  }, [showExamples]);
+
+  useEffect(() => {
+    window.localStorage.setItem(fileSidebarCollapsedStorageKey, String(fileSidebarCollapsed));
+  }, [fileSidebarCollapsed]);
+
+  useEffect(() => {
+    window.localStorage.setItem(toolsSidebarCollapsedStorageKey, String(toolsSidebarCollapsed));
+  }, [toolsSidebarCollapsed]);
+
+  useEffect(() => {
+    window.localStorage.setItem(inspectorCollapsedStorageKey, String(inspectorCollapsed));
+  }, [inspectorCollapsed]);
+
   return (
     <ReactFlowProvider>
       <div
         className="app-shell"
-        style={{ gridTemplateColumns: `340px minmax(0, 1fr) 8px ${inspectorWidth}px` }}
+        style={{
+          gridTemplateColumns: [
+            `${fileSidebarCollapsed ? 48 : 320}px`,
+            `${toolsSidebarCollapsed ? 48 : 330}px`,
+            "minmax(0, 1fr)",
+            `${inspectorCollapsed ? 0 : 8}px`,
+            `${inspectorCollapsed ? 48 : inspectorWidth}px`,
+          ].join(" "),
+        }}
       >
-        <aside className="sidebar">
-          <div className="brand-block">
-            <div className="brand-mark">
-              <GitBranch size={21} />
-            </div>
-            <div>
-              <h1>Liminal</h1>
-              <p>Pipeline graph</p>
-            </div>
-          </div>
-
-          <div className="path-row">
-            <FileJson size={17} />
-            <input
-              value={configPath}
-              onChange={(event) => setConfigPath(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  loadGraph(configPath);
-                }
-              }}
-              aria-label="Config path"
-            />
+        <aside className={fileSidebarCollapsed ? "sidebar file-sidebar collapsed" : "sidebar file-sidebar"}>
+          {fileSidebarCollapsed ? (
             <button
-              className="icon-button"
-              onClick={() => loadGraph(configPath)}
-              aria-label="Reload graph"
-              title="Reload graph"
+              className="sidebar-toggle collapsed-toggle"
+              onClick={() => setFileSidebarCollapsed(false)}
+              aria-label="Expand file sidebar"
+              title="Expand file sidebar"
             >
-              {loadState === "loading" ? (
-                <Loader2 className="spin" size={17} />
-              ) : (
-                <RefreshCw size={17} />
-              )}
+              <PanelLeftOpen size={18} />
             </button>
+          ) : (
+            <>
+              <div className="brand-row">
+                <div className="brand-block">
+                  <div className="brand-mark">
+                    <GitBranch size={21} />
+                  </div>
+                  <div>
+                    <h1>Liminal</h1>
+                    <p>Pipeline graph</p>
+                  </div>
+                </div>
+                <button
+                  className="sidebar-toggle"
+                  onClick={() => setFileSidebarCollapsed(true)}
+                  aria-label="Collapse file sidebar"
+                  title="Collapse file sidebar"
+                >
+                  <PanelLeftClose size={17} />
+                </button>
+              </div>
+
+              <ConfigBrowserPanel
+                configPath={configPath}
+                draftContent={draftContent}
+                exampleConfigs={exampleConfigs}
+                isDirty={isDirty}
+                loadState={loadState}
+                recentConfigPaths={recentConfigPaths}
+                saveState={saveState}
+                showExamples={showExamples}
+                workspacePath={workspacePath}
+                workspaceConfigs={workspaceConfigs}
+                onClearRecent={() => setRecentConfigPaths(clearStoredRecentConfigs())}
+                onCopyIntoWorkspace={copyIntoWorkspace}
+                onLoadConfig={openConfigPath}
+                onOpenFile={openConfigFile}
+                onOpenFolder={openWorkspaceFolder}
+                onPathChange={setConfigPath}
+                onReload={reloadConfig}
+                onRevert={revertDraft}
+                onSave={saveDraft}
+                onSaveAs={saveDraftAs}
+                onToggleExamples={setShowExamples}
+              />
+            </>
+          )}
+        </aside>
+
+        <aside className={toolsSidebarCollapsed ? "sidebar tools-sidebar collapsed" : "sidebar tools-sidebar"}>
+          {toolsSidebarCollapsed ? (
             <button
-              className="icon-button"
-              onClick={saveDraft}
-              disabled={!isDirty || saveState === "saving"}
-              aria-label="Save draft"
-              title="Save draft"
+              className="sidebar-toggle collapsed-toggle"
+              onClick={() => setToolsSidebarCollapsed(false)}
+              aria-label="Expand tools sidebar"
+              title="Expand tools sidebar"
             >
-              {saveState === "saving" ? <Loader2 className="spin" size={17} /> : <Save size={17} />}
+              <PanelLeftOpen size={18} />
             </button>
-            <button
-              className="icon-button"
-              onClick={revertDraft}
-              disabled={!isDirty || saveState === "saving"}
-              aria-label="Revert draft"
-              title="Revert draft"
-            >
-              <RotateCcw size={17} />
-            </button>
-          </div>
+          ) : (
+            <>
+              <div className="tools-sidebar-header">
+                <div className="search-row">
+                  <Search size={16} />
+                  <input
+                    ref={searchInputRef}
+                    value={filterText}
+                    onChange={(event) => setFilterText(event.target.value)}
+                    placeholder="Search nodes or channels"
+                    aria-label="Search nodes or channels"
+                  />
+                </div>
+                <button
+                  className="sidebar-toggle"
+                  onClick={() => setToolsSidebarCollapsed(true)}
+                  aria-label="Collapse tools sidebar"
+                  title="Collapse tools sidebar"
+                >
+                  <PanelLeftClose size={17} />
+                </button>
+              </div>
 
-          <RecentConfigsPanel
-            configPath={configPath}
-            recentConfigPaths={recentConfigPaths}
-            onLoad={(path) => {
-              setConfigPath(path);
-              loadGraph(path);
-            }}
-            onClear={() => setRecentConfigPaths(clearStoredRecentConfigs())}
-          />
+              <ToolsSidebarSection title="Add Node" icon={<Plus size={16} />}>
+                <AddNodePanel
+                  graph={graph}
+                  hideTitle
+                  processorDescriptors={processorDescriptors}
+                  saveState={saveState}
+                  onAddNode={addGraphNode}
+                />
+              </ToolsSidebarSection>
 
-          <div className="example-list">
-            {exampleConfigs.map((path) => (
-              <button
-                key={path}
-                className={path === configPath ? "example active" : "example"}
-                onClick={() => {
-                  setConfigPath(path);
-                  loadGraph(path);
-                }}
-              >
-                {configFileName(path)}
-              </button>
-            ))}
-          </div>
+              <ToolsSidebarSection title="Graph Status" icon={<Boxes size={16} />}>
+                <SummaryPanel graph={graph} hideTitle />
+                <GraphStatusPanel
+                  graph={graph}
+                  loadState={loadState}
+                  saveState={saveState}
+                  error={error}
+                  isDirty={isDirty}
+                />
+              </ToolsSidebarSection>
 
-          <div className="search-row">
-            <Search size={16} />
-            <input
-              value={filterText}
-              onChange={(event) => setFilterText(event.target.value)}
-              placeholder="Search nodes or channels"
-              aria-label="Search nodes or channels"
-            />
-          </div>
-
-          <AddNodePanel
-            graph={graph}
-            processorDescriptors={processorDescriptors}
-            saveState={saveState}
-            onAddNode={addGraphNode}
-          />
-
-          <SummaryPanel graph={graph} />
-          <GraphStatusPanel
-            graph={graph}
-            loadState={loadState}
-            saveState={saveState}
-            error={error}
-            isDirty={isDirty}
-          />
-          <DiagnosticsPanel
-            graph={graph}
-            filter={diagnosticsFilter}
-            onFilterChange={setDiagnosticsFilter}
-            selectedDiagnosticKey={selectedDiagnosticKey}
-            onSelectDiagnostic={selectDiagnostic}
-            onPreviousDiagnostic={() => selectDiagnosticByStep(-1)}
-            onNextDiagnostic={() => selectDiagnosticByStep(1)}
-          />
+              <ToolsSidebarSection title="Diagnostics" icon={<AlertCircle size={16} />} grow>
+                <DiagnosticsPanel
+                  graph={graph}
+                  hideTitle
+                  filter={diagnosticsFilter}
+                  onFilterChange={setDiagnosticsFilter}
+                  selectedDiagnosticKey={selectedDiagnosticKey}
+                  onSelectDiagnostic={selectDiagnostic}
+                  onPreviousDiagnostic={() => selectDiagnosticByStep(-1)}
+                  onNextDiagnostic={() => selectDiagnosticByStep(1)}
+                />
+              </ToolsSidebarSection>
+            </>
+          )}
         </aside>
 
         <main className="workspace">
           <GraphCanvas
             graph={graph}
-            configPath={configPath}
+            configPath={loadedConfigPath ?? configPath}
             selectedNodeId={selectedNodeId}
             selectedChannelName={selectedChannelName}
             selectedEdgeId={selectedEdgeId}
@@ -763,33 +1089,56 @@ function App() {
         </main>
 
         <div
-          className="inspector-resizer"
+          className={inspectorCollapsed ? "inspector-resizer collapsed" : "inspector-resizer"}
           role="separator"
           aria-orientation="vertical"
           aria-label="Resize inspector"
           title="Resize inspector"
-          onMouseDown={startInspectorResize}
+          onMouseDown={inspectorCollapsed ? undefined : startInspectorResize}
           onDoubleClick={() => setInspectorWidth(defaultInspectorWidth)}
         />
 
-        <InspectorPanel
-          graph={graph}
-          configPath={configPath}
-          processorDescriptors={processorDescriptors}
-          selectedNodeId={selectedNodeId}
-          selectedChannelName={selectedChannelName}
-          selectedEdgeId={selectedEdgeId}
-          selectedDiagnosticKey={selectedDiagnosticKey}
-          onSelectNode={selectNode}
-          onSelectChannel={selectChannel}
-          onSelectEdge={selectEdge}
-          onUpdateNodeParameter={updateNodeParameter}
-          onUpdateNodeParameterJson={updateNodeParameterJson}
-          onUpdateNodeField={updateNodeField}
-          onDisconnectEdge={disconnectGraphEdge}
-          onDeleteNode={deleteGraphNode}
-          saveState={saveState}
-        />
+        {inspectorCollapsed ? (
+          <aside className="inspector collapsed">
+            <button
+              className="sidebar-toggle collapsed-toggle"
+              onClick={() => setInspectorCollapsed(false)}
+              aria-label="Expand inspector"
+              title="Expand inspector"
+            >
+              <PanelRightOpen size={18} />
+            </button>
+          </aside>
+        ) : (
+          <div className="inspector-shell">
+            <button
+              className="sidebar-toggle inspector-collapse-button"
+              onClick={() => setInspectorCollapsed(true)}
+              aria-label="Collapse inspector"
+              title="Collapse inspector"
+            >
+              <PanelRightClose size={17} />
+            </button>
+            <InspectorPanel
+              graph={graph}
+              configPath={configPath}
+              processorDescriptors={processorDescriptors}
+              selectedNodeId={selectedNodeId}
+              selectedChannelName={selectedChannelName}
+              selectedEdgeId={selectedEdgeId}
+              selectedDiagnosticKey={selectedDiagnosticKey}
+              onSelectNode={selectNode}
+              onSelectChannel={selectChannel}
+              onSelectEdge={selectEdge}
+              onUpdateNodeParameter={updateNodeParameter}
+              onUpdateNodeParameterJson={updateNodeParameterJson}
+              onUpdateNodeField={updateNodeField}
+              onDisconnectEdge={disconnectGraphEdge}
+              onDeleteNode={deleteGraphNode}
+              saveState={saveState}
+            />
+          </div>
+        )}
         {pendingDelete && (
           <DeleteNodeDialog
             pendingDelete={pendingDelete}
@@ -798,20 +1147,33 @@ function App() {
             onConfirm={confirmDeleteGraphNode}
           />
         )}
+        {pendingDiscardAction && (
+          <UnsavedChangesDialog
+            action={pendingDiscardAction}
+            onCancel={() => setPendingDiscardAction(null)}
+            onConfirm={async () => {
+              const action = pendingDiscardAction;
+              setPendingDiscardAction(null);
+              await action.run();
+            }}
+          />
+        )}
       </div>
     </ReactFlowProvider>
   );
 }
 
-function SummaryPanel({ graph }: { graph: ResolvedPipelineGraph | null }) {
+function SummaryPanel({ graph, hideTitle = false }: { graph: ResolvedPipelineGraph | null; hideTitle?: boolean }) {
   const summary = graph?.summary;
 
   return (
     <section className="panel">
-      <div className="panel-title">
-        <Boxes size={16} />
-        <span>Graph</span>
-      </div>
+      {!hideTitle && (
+        <div className="panel-title">
+          <Boxes size={16} />
+          <span>Graph</span>
+        </div>
+      )}
       <div className="metric-grid">
         <Metric label="Nodes" value={summary?.node_count ?? 0} />
         <Metric label="Edges" value={summary?.edge_count ?? 0} />
@@ -856,53 +1218,282 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
-function RecentConfigsPanel({
+function ToolsSidebarSection({
+  title,
+  icon,
+  grow = false,
+  children,
+}: {
+  title: string;
+  icon: ReactNode;
+  grow?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <section className={grow ? "tools-sidebar-section grow" : "tools-sidebar-section"}>
+      <div className="tools-sidebar-section-title">
+        {icon}
+        <span>{title}</span>
+      </div>
+      <div className="tools-sidebar-section-body">{children}</div>
+    </section>
+  );
+}
+
+function ConfigBrowserPanel({
   configPath,
+  draftContent,
+  exampleConfigs,
+  isDirty,
+  loadState,
   recentConfigPaths,
-  onLoad,
-  onClear,
+  saveState,
+  showExamples,
+  workspaceConfigs,
+  workspacePath,
+  onClearRecent,
+  onCopyIntoWorkspace,
+  onLoadConfig,
+  onOpenFile,
+  onOpenFolder,
+  onPathChange,
+  onReload,
+  onRevert,
+  onSave,
+  onSaveAs,
+  onToggleExamples,
 }: {
   configPath: string;
+  draftContent: string | null;
+  exampleConfigs: string[];
+  isDirty: boolean;
+  loadState: "idle" | "loading" | "error";
   recentConfigPaths: string[];
-  onLoad: (path: string) => void;
-  onClear: () => void;
+  saveState: SaveState;
+  showExamples: boolean;
+  workspaceConfigs: string[];
+  workspacePath: string;
+  onClearRecent: () => void;
+  onCopyIntoWorkspace: () => void;
+  onLoadConfig: (path: string) => void;
+  onOpenFile: () => void;
+  onOpenFolder: () => void;
+  onPathChange: (path: string) => void;
+  onReload: () => void;
+  onRevert: () => void;
+  onSave: () => void;
+  onSaveAs: () => void;
+  onToggleExamples: (show: boolean) => void;
 }) {
-  if (recentConfigPaths.length === 0) {
-    return null;
-  }
+  const canCopyIntoWorkspace =
+    Boolean(workspacePath) &&
+    Boolean(draftContent) &&
+    !pathMatchesAny(configPath, workspaceConfigs);
 
   return (
-    <section className="recent-configs">
-      <div className="sidebar-section-title">
+    <div className="config-browser">
+      <div className="config-browser-header">
         <div>
-          <History size={14} />
-          <span>Recent</span>
+          <FileJson size={16} />
+          <span>Config</span>
         </div>
-        <button onClick={onClear}>Clear</button>
+        <span className={isDirty ? "file-browser-badge dirty" : "file-browser-badge"}>
+          {isDirty ? "Unsaved" : "Saved"}
+        </span>
       </div>
-      <div className="example-list compact">
-        {recentConfigPaths.map((path) => (
-          <button
-            key={path}
-            className={path === configPath ? "example active" : "example"}
-            onClick={() => onLoad(path)}
-            title={path}
-          >
-            {path}
-          </button>
-        ))}
+
+      <div className="file-browser-current">
+        <FileJson size={17} />
+        <input
+          value={configPath}
+          onChange={(event) => onPathChange(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              onReload();
+            }
+          }}
+          aria-label="Config path"
+        />
+        <button
+          className="icon-button"
+          onClick={onReload}
+          aria-label="Reload graph"
+          title="Reload graph"
+        >
+          {loadState === "loading" ? (
+            <Loader2 className="spin" size={17} />
+          ) : (
+            <RefreshCw size={17} />
+          )}
+        </button>
+        <button
+          className="icon-button"
+          onClick={onSave}
+          disabled={!isDirty || saveState === "saving"}
+          aria-label="Save draft"
+          title="Save draft"
+        >
+          {saveState === "saving" ? <Loader2 className="spin" size={17} /> : <Save size={17} />}
+        </button>
+        <button
+          className="icon-button"
+          onClick={onRevert}
+          disabled={!isDirty || saveState === "saving"}
+          aria-label="Revert draft"
+          title="Revert draft"
+        >
+          <RotateCcw size={17} />
+        </button>
       </div>
+
+      <div className="file-action-row">
+        <button onClick={onOpenFile}>
+          <FileJson size={15} />
+          <span>Open File</span>
+        </button>
+        <button onClick={onOpenFolder}>
+          <FolderOpen size={15} />
+          <span>Open Folder</span>
+        </button>
+        <button onClick={onSaveAs} disabled={!draftContent || saveState === "saving"}>
+          <Save size={15} />
+          <span>Save As</span>
+        </button>
+      </div>
+
+      {workspacePath && (
+        <button
+          className="copy-workspace-action"
+          onClick={onCopyIntoWorkspace}
+          disabled={!canCopyIntoWorkspace || saveState === "saving"}
+          title={
+            canCopyIntoWorkspace
+              ? "Copy the active config into the selected workspace"
+              : "The active config is already in the workspace"
+          }
+        >
+          <Copy size={14} />
+          <span>Copy Into Workspace</span>
+        </button>
+      )}
+
+      <FileBrowserSection
+        title="Workspace"
+        icon={<FolderOpen size={14} />}
+        meta={workspacePath ? configFileName(workspacePath) : undefined}
+        metaTitle={workspacePath}
+      >
+        {workspaceConfigs.length === 0 ? (
+          <p className="empty-state">{workspacePath ? "No TOML files found." : "No folder selected."}</p>
+        ) : (
+          <ConfigFileList paths={workspaceConfigs} activePath={configPath} onLoad={onLoadConfig} />
+        )}
+      </FileBrowserSection>
+
+      <FileBrowserSection
+        title="Recent"
+        icon={<History size={14} />}
+        action={recentConfigPaths.length > 0 ? <button onClick={onClearRecent}>Clear List</button> : undefined}
+      >
+        {recentConfigPaths.length === 0 ? (
+          <p className="empty-state">No recent configs.</p>
+        ) : (
+          <ConfigFileList paths={recentConfigPaths} activePath={configPath} onLoad={onLoadConfig} />
+        )}
+      </FileBrowserSection>
+
+      <FileBrowserSection
+        title="Examples"
+        icon={<FileJson size={14} />}
+        action={
+          <label className="file-toggle-row">
+            <input
+              type="checkbox"
+              checked={showExamples}
+              onChange={(event) => onToggleExamples(event.target.checked)}
+            />
+            <span>Show</span>
+          </label>
+        }
+      >
+        {showExamples && (
+          <ConfigFileList
+            paths={exampleConfigs}
+            activePath={configPath}
+            labelMode="name"
+            onLoad={onLoadConfig}
+          />
+        )}
+      </FileBrowserSection>
+    </div>
+  );
+}
+
+function FileBrowserSection({
+  title,
+  icon,
+  action,
+  meta,
+  metaTitle,
+  children,
+}: {
+  title: string;
+  icon: ReactNode;
+  action?: ReactNode;
+  meta?: string;
+  metaTitle?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="file-browser-section">
+      <div className="file-browser-section-title">
+        <div>
+          {icon}
+          <span>{title}</span>
+        </div>
+        {action ?? (meta ? <strong title={metaTitle}>{meta}</strong> : null)}
+      </div>
+      {children}
     </section>
+  );
+}
+
+function ConfigFileList({
+  paths,
+  activePath,
+  labelMode = "path",
+  onLoad,
+}: {
+  paths: string[];
+  activePath: string;
+  labelMode?: "path" | "name";
+  onLoad: (path: string) => void;
+}) {
+  return (
+    <div className="example-list compact">
+      {paths.map((path) => (
+        <button
+          key={path}
+          className={path === activePath ? "example active" : "example"}
+          onClick={() => onLoad(path)}
+          title={path}
+        >
+          {labelMode === "name" ? configFileName(path) : path}
+        </button>
+      ))}
+    </div>
   );
 }
 
 function AddNodePanel({
   graph,
+  hideTitle = false,
   processorDescriptors,
   saveState,
   onAddNode,
 }: {
   graph: ResolvedPipelineGraph | null;
+  hideTitle?: boolean;
   processorDescriptors: ProcessorDescriptor[];
   saveState: SaveState;
   onAddNode: (
@@ -957,10 +1548,12 @@ function AddNodePanel({
 
   return (
     <section className="panel add-node-panel">
-      <div className="panel-title">
-        <Plus size={16} />
-        <span>Add Node</span>
-      </div>
+      {!hideTitle && (
+        <div className="panel-title">
+          <Plus size={16} />
+          <span>Add Node</span>
+        </div>
+      )}
       <form
         className="add-node-form"
         onSubmit={(event) => {
@@ -1031,6 +1624,7 @@ function AddNodePanel({
 
 function DiagnosticsPanel({
   graph,
+  hideTitle = false,
   filter,
   onFilterChange,
   selectedDiagnosticKey,
@@ -1039,6 +1633,7 @@ function DiagnosticsPanel({
   onNextDiagnostic,
 }: {
   graph: ResolvedPipelineGraph | null;
+  hideTitle?: boolean;
   filter: DiagnosticsFilter;
   onFilterChange: (filter: DiagnosticsFilter) => void;
   selectedDiagnosticKey: string | null;
@@ -1054,10 +1649,12 @@ function DiagnosticsPanel({
 
   return (
     <section className="panel diagnostics-panel">
-      <div className="panel-title">
-        <AlertCircle size={16} />
-        <span>Diagnostics</span>
-      </div>
+      {!hideTitle && (
+        <div className="panel-title">
+          <AlertCircle size={16} />
+          <span>Diagnostics</span>
+        </div>
+      )}
       <div className="diagnostic-toolbar">
         <div className="segmented-control" aria-label="Diagnostics filter">
           <button className={filter === "all" ? "active" : ""} onClick={() => onFilterChange("all")}>
@@ -2179,6 +2776,63 @@ function EditableFieldRow({
   );
 }
 
+function UnsavedChangesDialog({
+  action,
+  onCancel,
+  onConfirm,
+}: {
+  action: PendingDiscardAction;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onCancel();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [onCancel]);
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
+      <section
+        className="confirm-dialog neutral"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="unsaved-changes-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="confirm-dialog-header">
+          <div className="confirm-dialog-icon">
+            <AlertCircle size={20} />
+          </div>
+          <div>
+            <span>Unsaved Draft</span>
+            <h2 id="unsaved-changes-title">{action.title}</h2>
+          </div>
+        </div>
+
+        <div className="confirm-dialog-body">
+          <p className="confirm-dialog-message">{action.detail}</p>
+        </div>
+
+        <div className="confirm-dialog-actions">
+          <button className="secondary-action" onClick={onCancel}>
+            Keep Editing
+          </button>
+          <button className="primary-action" onClick={onConfirm}>
+            <RotateCcw size={15} />
+            <span>{action.confirmLabel}</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function DeleteNodeDialog({
   pendingDelete,
   saveState,
@@ -2777,8 +3431,11 @@ function GraphCanvas({
             });
           }}
           onNodeDragStop={(_, node) => {
-            writeStoredNodePosition(configPath, node.id, node.position);
-            setNodes((currentNodes) => mergeDraggedNode(currentNodes, node));
+            setNodes((currentNodes) => {
+              const nextNodes = mergeDraggedNode(currentNodes, node);
+              writeStoredNodePositions(configPath, nextNodes);
+              return nextNodes;
+            });
             setLayoutRevision((revision) => revision + 1);
           }}
           onNodeClick={(_, node) => {
@@ -3719,8 +4376,30 @@ function graphFocusState(
 }
 
 function configFileName(path: string) {
-  const parts = path.split("/");
+  const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] || path;
+}
+
+function normalizeComparablePath(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+}
+
+function pathMatchesAny(path: string, paths: string[]) {
+  const normalizedPath = normalizeComparablePath(path);
+  return paths.some((candidate) => normalizeComparablePath(candidate) === normalizedPath);
+}
+
+function isTextEditingTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return (
+    target instanceof HTMLInputElement ||
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
+  );
 }
 
 function deletionImpact(graph: ResolvedPipelineGraph, node: GraphNode): DeleteImpact {
@@ -3873,6 +4552,18 @@ function clearStoredRecentConfigs() {
   return [];
 }
 
+function readStoredWorkspacePath() {
+  return window.localStorage.getItem(workspacePathStorageKey) ?? "";
+}
+
+function readStoredShowExamples() {
+  return window.localStorage.getItem(showExamplesStorageKey) !== "false";
+}
+
+function readStoredCollapsedState(storageKey: string) {
+  return window.localStorage.getItem(storageKey) === "true";
+}
+
 function readStoredLayout(configPath: string): Record<string, LayoutPosition> {
   try {
     const storedLayout = window.localStorage.getItem(layoutStorageKey(configPath));
@@ -3893,12 +4584,16 @@ function readStoredLayout(configPath: string): Record<string, LayoutPosition> {
   }
 }
 
-function writeStoredNodePosition(configPath: string, nodeId: string, position: LayoutPosition) {
-  const layout = readStoredLayout(configPath);
-  layout[nodeId] = {
-    x: Math.round(position.x),
-    y: Math.round(position.y),
-  };
+function writeStoredNodePositions(configPath: string, nodes: Node<FlowNodeData>[]) {
+  const layout = Object.fromEntries(
+    nodes.map((node) => [
+      node.id,
+      {
+        x: Math.round(node.position.x),
+        y: Math.round(node.position.y),
+      },
+    ]),
+  );
 
   window.localStorage.setItem(layoutStorageKey(configPath), JSON.stringify(layout));
 }

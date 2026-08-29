@@ -5,6 +5,7 @@ use liminal::processors::descriptor::{
 use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
+use tauri_plugin_dialog::{DialogExt, FilePath};
 use toml_edit::{Array, DocumentMut, Item, Table, Value};
 
 #[derive(Serialize)]
@@ -16,13 +17,8 @@ struct DraftEditResult {
 #[tauri::command]
 fn load_graph(path: String) -> Result<ResolvedPipelineGraph, String> {
     let resolved_path = resolve_config_path(&path)?;
-    let config = load_config(&resolved_path).map_err(|error| {
-        format!(
-            "Failed to load '{}': {}",
-            resolved_path.display(),
-            error
-        )
-    })?;
+    let config = load_config(&resolved_path)
+        .map_err(|error| format!("Failed to load '{}': {}", resolved_path.display(), error))?;
 
     Ok(ResolvedPipelineGraph::from_config(&config))
 }
@@ -44,6 +40,119 @@ fn save_config_text(path: String, content: String) -> Result<ResolvedPipelineGra
         .map_err(|error| format!("Failed to write '{}': {}", resolved_path.display(), error))?;
 
     Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+#[tauri::command]
+fn save_config_as(path: String, content: String) -> Result<ResolvedPipelineGraph, String> {
+    let target_path = writable_config_path(&path)?;
+    let config = toml::from_str::<Config>(&content)
+        .map_err(|error| format!("Edited TOML no longer parses: {}", error))?;
+
+    if let Some(parent) = target_path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("Failed to create '{}': {}", parent.display(), error))?;
+    }
+
+    fs::write(&target_path, content)
+        .map_err(|error| format!("Failed to write '{}': {}", target_path.display(), error))?;
+
+    Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+#[tauri::command]
+fn copy_config_to_workspace(
+    workspace_path: String,
+    source_path: String,
+    content: String,
+) -> Result<String, String> {
+    let target_path = copy_config_to_workspace_path(&workspace_path, &source_path, &content)?;
+    Ok(relative_to_repo(&target_path))
+}
+
+#[tauri::command]
+fn list_workspace_configs(path: String) -> Result<Vec<String>, String> {
+    let folder = PathBuf::from(&path);
+    let folder = if folder.is_absolute() {
+        folder
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(folder)
+    };
+
+    if !folder.is_dir() {
+        return Err(format!("Workspace folder not found: {}", path));
+    }
+
+    let mut configs = Vec::new();
+    collect_toml_files(&folder, &mut configs)?;
+    configs.sort();
+    Ok(configs)
+}
+
+#[tauri::command]
+async fn pick_config_file(window: tauri::Window) -> Result<Option<String>, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("Open Config")
+        .add_filter("TOML config", &["toml"])
+        .pick_file(move |selected| {
+            let _ = sender.send(selected.map(dialog_path_to_string).transpose());
+        });
+
+    wait_for_dialog_path(receiver).await
+}
+
+#[tauri::command]
+async fn pick_workspace_folder(window: tauri::Window) -> Result<Option<String>, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+
+    window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("Open Workspace Folder")
+        .pick_folder(move |selected| {
+            let _ = sender.send(selected.map(dialog_path_to_string).transpose());
+        });
+
+    wait_for_dialog_path(receiver).await
+}
+
+#[tauri::command]
+async fn pick_save_config_path(
+    window: tauri::Window,
+    default_path: String,
+) -> Result<Option<String>, String> {
+    let mut dialog = window
+        .dialog()
+        .file()
+        .set_parent(&window)
+        .set_title("Save Config As")
+        .add_filter("TOML config", &["toml"]);
+    let default_path = PathBuf::from(default_path);
+
+    if let Some(parent) = default_path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+    {
+        dialog = dialog.set_directory(parent);
+    }
+
+    if let Some(file_name) = default_path.file_name() {
+        dialog = dialog.set_file_name(file_name.to_string_lossy().to_string());
+    }
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    dialog.save_file(move |selected| {
+        let _ = sender.send(selected.map(dialog_path_to_string).transpose());
+    });
+
+    wait_for_dialog_path(receiver).await
 }
 
 #[tauri::command]
@@ -123,7 +232,12 @@ fn add_node_draft(
     validate_node_name(node_name)?;
 
     let mut document = document_from_content(&content)?;
-    add_node_to_document(&mut document, &descriptor, node_name, pipeline_name.as_deref())?;
+    add_node_to_document(
+        &mut document,
+        &descriptor,
+        node_name,
+        pipeline_name.as_deref(),
+    )?;
     draft_result_from_document(document)
 }
 
@@ -284,7 +398,12 @@ fn add_node(
         .parse::<DocumentMut>()
         .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
 
-    add_node_to_document(&mut document, &descriptor, node_name, pipeline_name.as_deref())?;
+    add_node_to_document(
+        &mut document,
+        &descriptor,
+        node_name,
+        pipeline_name.as_deref(),
+    )?;
     write_document_and_resolve(&resolved_path, document)
 }
 
@@ -358,6 +477,125 @@ fn resolve_config_path(path: &str) -> Result<PathBuf, String> {
     }
 
     Err(format!("Config file not found: {}", path))
+}
+
+fn writable_config_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return Err("Save path cannot be empty".to_string());
+    }
+
+    let path = PathBuf::from(trimmed_path);
+    let resolved_path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(path)
+    };
+
+    if resolved_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        != Some("toml")
+    {
+        return Err("Config files must use the .toml extension".to_string());
+    }
+
+    Ok(resolved_path)
+}
+
+fn collect_toml_files(folder: &Path, configs: &mut Vec<String>) -> Result<(), String> {
+    for entry in fs::read_dir(folder)
+        .map_err(|error| format!("Failed to read '{}': {}", folder.display(), error))?
+    {
+        let entry = entry.map_err(|error| error.to_string())?;
+        let path = entry.path();
+
+        if path.is_dir() {
+            collect_toml_files(&path, configs)?;
+        } else if path.extension().and_then(|extension| extension.to_str()) == Some("toml") {
+            configs.push(relative_to_repo(&path));
+        }
+    }
+
+    Ok(())
+}
+
+fn copy_config_to_workspace_path(
+    workspace_path: &str,
+    source_path: &str,
+    content: &str,
+) -> Result<PathBuf, String> {
+    toml::from_str::<Config>(content)
+        .map_err(|error| format!("Edited TOML no longer parses: {}", error))?;
+
+    let workspace = writable_directory_path(workspace_path)?;
+    let source = PathBuf::from(source_path);
+    let file_name = source
+        .file_name()
+        .ok_or_else(|| "Source config path does not include a file name".to_string())?;
+    let target_path = writable_config_path(&workspace.join(file_name).to_string_lossy())?;
+
+    fs::create_dir_all(&workspace)
+        .map_err(|error| format!("Failed to create '{}': {}", workspace.display(), error))?;
+
+    if target_path.exists() {
+        let source_resolved = resolve_config_path(source_path).ok();
+        let same_file = source_resolved
+            .and_then(|path| path.canonicalize().ok())
+            .zip(target_path.canonicalize().ok())
+            .is_some_and(|(source, target)| source == target);
+
+        if !same_file {
+            return Err(format!(
+                "Workspace already contains '{}'. Use Save As to choose an explicit destination.",
+                target_path.display()
+            ));
+        }
+    }
+
+    fs::write(&target_path, content)
+        .map_err(|error| format!("Failed to write '{}': {}", target_path.display(), error))?;
+
+    Ok(target_path)
+}
+
+fn writable_directory_path(path: &str) -> Result<PathBuf, String> {
+    let trimmed_path = path.trim();
+    if trimmed_path.is_empty() {
+        return Err("Workspace path cannot be empty".to_string());
+    }
+
+    let path = PathBuf::from(trimmed_path);
+    let resolved_path = if path.is_absolute() {
+        path
+    } else {
+        std::env::current_dir()
+            .map_err(|error| error.to_string())?
+            .join(path)
+    };
+
+    Ok(resolved_path)
+}
+
+fn dialog_path_to_string(path: FilePath) -> Result<String, String> {
+    path.simplified()
+        .into_path()
+        .map(|path| path.to_string_lossy().to_string())
+        .map_err(|error| format!("Selected path is not a filesystem path: {}", error))
+}
+
+async fn wait_for_dialog_path(
+    receiver: std::sync::mpsc::Receiver<Result<Option<String>, String>>,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        receiver
+            .recv()
+            .unwrap_or_else(|_| Err("Dialog closed without returning a result".to_string()))
+    })
+    .await
+    .map_err(|error| format!("Failed to receive dialog result: {}", error))?
 }
 
 fn repo_root() -> PathBuf {
@@ -781,9 +1019,12 @@ fn default_value_for_field(field: &FieldSpec) -> Result<Option<Value>, String> {
 
 fn toml_item_from_default_literal(default_value: &str) -> Result<Item, String> {
     let snippet = format!("value = {}", default_value);
-    let mut document = snippet
-        .parse::<DocumentMut>()
-        .map_err(|error| format!("Failed to parse descriptor default '{}': {}", default_value, error))?;
+    let mut document = snippet.parse::<DocumentMut>().map_err(|error| {
+        format!(
+            "Failed to parse descriptor default '{}': {}",
+            default_value, error
+        )
+    })?;
 
     Ok(document.remove("value").unwrap_or(Item::None))
 }
@@ -836,7 +1077,9 @@ fn validate_node_name(name: &str) -> Result<(), String> {
         .chars()
         .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
     {
-        return Err("Node names may only contain letters, numbers, underscores, and hyphens".to_string());
+        return Err(
+            "Node names may only contain letters, numbers, underscores, and hyphens".to_string(),
+        );
     }
 
     Ok(())
@@ -880,7 +1123,13 @@ fn toml_literal_from_json(value: &serde_json::Value) -> Result<String, String> {
             .map(|values| format!("[{}]", values.join(", "))),
         serde_json::Value::Object(values) => values
             .iter()
-            .map(|(key, value)| Ok(format!("{} = {}", toml_key(key), toml_literal_from_json(value)?)))
+            .map(|(key, value)| {
+                Ok(format!(
+                    "{} = {}",
+                    toml_key(key),
+                    toml_literal_from_json(value)?
+                ))
+            })
             .collect::<Result<Vec<_>, String>>()
             .map(|fields| format!("{{ {} }}", fields.join(", "))),
     }
@@ -1079,7 +1328,10 @@ fn parse_non_negative_integer(value: &str, label: &str) -> Result<i64, String> {
     Ok(parsed)
 }
 
-fn stage_item_mut<'a>(document: &'a mut DocumentMut, node_id: &str) -> Result<&'a mut Item, String> {
+fn stage_item_mut<'a>(
+    document: &'a mut DocumentMut,
+    node_id: &str,
+) -> Result<&'a mut Item, String> {
     if let Some(name) = node_id.strip_prefix("input:") {
         return document
             .get_mut("inputs")
@@ -1157,10 +1409,17 @@ fn set_existing_scalar_value(existing: &mut Value, value: &str) -> Result<(), St
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             load_graph,
             load_config_text,
             save_config_text,
+            save_config_as,
+            copy_config_to_workspace,
+            list_workspace_configs,
+            pick_config_file,
+            pick_workspace_folder,
+            pick_save_config_path,
             add_node,
             add_node_draft,
             delete_node,
@@ -1324,8 +1583,13 @@ output = "raw_data"
 "#,
         );
 
-        update_existing_field(&mut document, "input:sensor", "concurrency.type", "pipeline")
-            .expect("concurrency type update succeeds");
+        update_existing_field(
+            &mut document,
+            "input:sensor",
+            "concurrency.type",
+            "pipeline",
+        )
+        .expect("concurrency type update succeeds");
 
         let edited = document.to_string();
         assert!(edited.contains("concurrency = {"));
@@ -1505,8 +1769,8 @@ actions = [{ type = "pass_through" }]
         assert!(edited.contains("temperature"));
         assert!(edited.contains("set_field"));
         assert_eq!(
-            parsed["pipelines"]["rules"]["stages"]["filter"]["parameters"]["rules"][0]
-                ["condition"]["field_path"],
+            parsed["pipelines"]["rules"]["stages"]["filter"]["parameters"]["rules"][0]["condition"]
+                ["field_path"],
             "temperature"
         );
     }
@@ -1677,13 +1941,96 @@ inputs = ["raw_data"]
 "#,
         );
 
-        delete_node_from_document(&mut document, "output:console")
-            .expect("output node is deleted");
+        delete_node_from_document(&mut document, "output:console").expect("output node is deleted");
 
         let edited = document.to_string();
         assert!(edited.contains("[inputs.sensor]"));
         assert!(edited.contains("output = \"raw_data\""));
         assert!(!edited.contains("[outputs.console]"));
+    }
+
+    #[test]
+    fn writable_config_path_requires_toml_extension() {
+        let error =
+            writable_config_path("pipeline.txt").expect_err("non TOML save path is rejected");
+
+        assert!(error.contains(".toml"));
+    }
+
+    #[test]
+    fn recursively_lists_workspace_toml_configs() {
+        let workspace = unique_temp_workspace_path();
+        let nested = workspace.join("nested");
+        fs::create_dir_all(&nested).expect("workspace folders are created");
+        fs::write(workspace.join("root.toml"), "").expect("root toml is written");
+        fs::write(nested.join("child.toml"), "").expect("nested toml is written");
+        fs::write(nested.join("notes.txt"), "").expect("non toml is written");
+
+        let mut configs = Vec::new();
+        collect_toml_files(&workspace, &mut configs).expect("workspace configs are listed");
+        let _ = fs::remove_dir_all(&workspace);
+
+        assert_eq!(configs.len(), 2);
+        assert!(configs.iter().any(|path| path.ends_with("root.toml")));
+        assert!(configs.iter().any(|path| path.ends_with("child.toml")));
+        assert!(!configs.iter().any(|path| path.ends_with("notes.txt")));
+    }
+
+    #[test]
+    fn copies_config_into_workspace() {
+        let workspace = unique_temp_workspace_path();
+        let source = unique_temp_config_path();
+        let content = r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+
+[outputs.console]
+type = "console"
+inputs = ["raw_data"]
+"#;
+        fs::write(&source, content).expect("source config is written");
+
+        let copied = copy_config_to_workspace_path(
+            &workspace.to_string_lossy(),
+            &source.to_string_lossy(),
+            content,
+        )
+        .expect("config is copied into workspace");
+
+        assert_eq!(copied.parent(), Some(workspace.as_path()));
+        assert_eq!(copied.file_name(), source.file_name());
+        assert_eq!(fs::read_to_string(&copied).expect("copied file is readable"), content);
+
+        let _ = fs::remove_file(&source);
+        let _ = fs::remove_dir_all(&workspace);
+    }
+
+    #[test]
+    fn copy_into_workspace_refuses_to_overwrite_existing_config() {
+        let workspace = unique_temp_workspace_path();
+        fs::create_dir_all(&workspace).expect("workspace folder is created");
+        let source = unique_temp_config_path();
+        let target = workspace.join(source.file_name().expect("source has a file name"));
+        let content = r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+"#;
+        fs::write(&source, content).expect("source config is written");
+        fs::write(&target, content).expect("existing workspace config is written");
+
+        let error = copy_config_to_workspace_path(
+            &workspace.to_string_lossy(),
+            &source.to_string_lossy(),
+            content,
+        )
+        .expect_err("existing workspace config is not overwritten");
+
+        assert!(error.contains("already contains"));
+
+        let _ = fs::remove_file(&source);
+        let _ = fs::remove_dir_all(&workspace);
     }
 
     #[test]
@@ -1697,13 +2044,9 @@ parameters = { interval_ms = 1000, enabled = true }
 "#,
         );
 
-        let number_error = update_existing_parameter(
-            &mut document,
-            "input:sensor",
-            "interval_ms",
-            "not-a-number",
-        )
-        .expect_err("invalid integer is rejected");
+        let number_error =
+            update_existing_parameter(&mut document, "input:sensor", "interval_ms", "not-a-number")
+                .expect_err("invalid integer is rejected");
         let bool_error =
             update_existing_parameter(&mut document, "input:sensor", "enabled", "sometimes")
                 .expect_err("invalid boolean is rejected");
@@ -1753,6 +2096,19 @@ inputs = ["raw_data"]
 
         std::env::temp_dir().join(format!(
             "liminal-gui-edit-test-{}-{}.toml",
+            std::process::id(),
+            nanos
+        ))
+    }
+
+    fn unique_temp_workspace_path() -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time is after UNIX epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!(
+            "liminal-gui-workspace-test-{}-{}",
             std::process::id(),
             nanos
         ))
