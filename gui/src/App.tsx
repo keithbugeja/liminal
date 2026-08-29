@@ -1524,17 +1524,17 @@ function ConfigBrowserPanel({
           <FilePlus size={15} />
           <span>New</span>
         </button>
-        <button onClick={onOpenFile}>
-          <FileJson size={15} />
-          <span>Open</span>
-        </button>
-        <button onClick={onOpenFolder}>
-          <FolderOpen size={15} />
-          <span>Folder</span>
-        </button>
         <button onClick={onSaveAs} disabled={draftContent === null || saveState === "saving"}>
           <Save size={15} />
           <span>Save As</span>
+        </button>
+        <button onClick={onOpenFile}>
+          <FileJson size={15} />
+          <span>Open File</span>
+        </button>
+        <button onClick={onOpenFolder}>
+          <FolderOpen size={15} />
+          <span>Open Folder</span>
         </button>
       </div>
 
