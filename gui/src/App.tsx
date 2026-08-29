@@ -4,6 +4,7 @@ import {
   applyNodeChanges,
   Background,
   BaseEdge,
+  Connection,
   Controls,
   Edge,
   EdgeChange,
@@ -31,6 +32,7 @@ import {
   Network,
   RefreshCw,
   Search,
+  Trash2,
 } from "lucide-react";
 import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 
@@ -146,6 +148,7 @@ type FlowNodeData = {
   graphNode: GraphNode;
   diagnostics: GraphDiagnostic[];
   channelDiagnosticCounts: Record<string, number>;
+  connectionState: "valid" | "invalid" | null;
   selectedChannelName: string | null;
   onSelectChannel: (channelName: string) => void;
 };
@@ -201,6 +204,7 @@ function App() {
   const [graph, setGraph] = useState<ResolvedPipelineGraph | null>(null);
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [selectedChannelName, setSelectedChannelName] = useState<string | null>(null);
+  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [selectedDiagnosticKey, setSelectedDiagnosticKey] = useState<string | null>(null);
   const [diagnosticsFilter, setDiagnosticsFilter] = useState<DiagnosticsFilter>("all");
   const [filterText, setFilterText] = useState("");
@@ -218,6 +222,7 @@ function App() {
       setGraph(nextGraph);
       setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
       setSelectedChannelName(null);
+      setSelectedEdgeId(null);
       setSelectedDiagnosticKey(null);
       setLoadState("idle");
       setSaveState("idle");
@@ -225,6 +230,7 @@ function App() {
       setGraph(null);
       setSelectedNodeId(null);
       setSelectedChannelName(null);
+      setSelectedEdgeId(null);
       setSelectedDiagnosticKey(null);
       setError(String(caught));
       setLoadState("error");
@@ -244,17 +250,28 @@ function App() {
   const selectNode = useCallback((id: string | null) => {
     setSelectedNodeId(id);
     setSelectedChannelName(null);
+    setSelectedEdgeId(null);
     setSelectedDiagnosticKey(null);
   }, []);
   const selectChannel = useCallback((channelName: string | null) => {
     setSelectedChannelName(channelName);
+    setSelectedEdgeId(null);
     if (channelName) {
       setSelectedNodeId(null);
     }
     setSelectedDiagnosticKey(null);
   }, []);
+  const selectEdge = useCallback((edgeId: string | null) => {
+    setSelectedEdgeId(edgeId);
+    if (edgeId) {
+      setSelectedNodeId(null);
+      setSelectedChannelName(null);
+    }
+    setSelectedDiagnosticKey(null);
+  }, []);
   const selectDiagnostic = useCallback((diagnostic: GraphDiagnostic, index: number) => {
     setSelectedDiagnosticKey(diagnosticKey(diagnostic, index));
+    setSelectedEdgeId(null);
 
     if (diagnostic.channel_name) {
       setSelectedChannelName(diagnostic.channel_name);
@@ -301,6 +318,7 @@ function App() {
         setGraph(nextGraph);
         setSelectedNodeId(nodeId);
         setSelectedChannelName(null);
+        setSelectedEdgeId(null);
         setSelectedDiagnosticKey(null);
         setSaveState("idle");
       } catch (caught) {
@@ -325,6 +343,62 @@ function App() {
         setGraph(nextGraph);
         setSelectedNodeId(nodeId);
         setSelectedChannelName(null);
+        setSelectedEdgeId(null);
+        setSelectedDiagnosticKey(null);
+        setSaveState("idle");
+      } catch (caught) {
+        setError(String(caught));
+        setSaveState("error");
+      }
+    },
+    [configPath],
+  );
+  const connectGraphNodes = useCallback(
+    async (sourceNodeId: string, targetNodeId: string) => {
+      const validationMessage = connectionValidationMessage(graph, sourceNodeId, targetNodeId);
+      if (validationMessage) {
+        setError(validationMessage);
+        setSaveState("error");
+        return;
+      }
+
+      setSaveState("saving");
+      setError(null);
+
+      try {
+        const nextGraph = await invoke<ResolvedPipelineGraph>("connect_nodes", {
+          path: configPath,
+          sourceNodeId,
+          targetNodeId,
+        });
+        setGraph(nextGraph);
+        setSelectedNodeId(targetNodeId);
+        setSelectedChannelName(null);
+        setSelectedEdgeId(null);
+        setSelectedDiagnosticKey(null);
+        setSaveState("idle");
+      } catch (caught) {
+        setError(String(caught));
+        setSaveState("error");
+      }
+    },
+    [configPath, graph],
+  );
+  const disconnectGraphEdge = useCallback(
+    async (targetNodeId: string, channelName: string) => {
+      setSaveState("saving");
+      setError(null);
+
+      try {
+        const nextGraph = await invoke<ResolvedPipelineGraph>("disconnect_edge", {
+          path: configPath,
+          targetNodeId,
+          channelName,
+        });
+        setGraph(nextGraph);
+        setSelectedNodeId(targetNodeId);
+        setSelectedChannelName(null);
+        setSelectedEdgeId(null);
         setSelectedDiagnosticKey(null);
         setSaveState("idle");
       } catch (caught) {
@@ -349,6 +423,7 @@ function App() {
         setGraph(nextGraph);
         setSelectedNodeId(nodeId);
         setSelectedChannelName(null);
+        setSelectedEdgeId(null);
         setSelectedDiagnosticKey(null);
         setSaveState("idle");
       } catch (caught) {
@@ -472,10 +547,14 @@ function App() {
             graph={graph}
             selectedNodeId={selectedNodeId}
             selectedChannelName={selectedChannelName}
+            selectedEdgeId={selectedEdgeId}
             selectedDiagnosticKey={selectedDiagnosticKey}
             filterText={filterText}
             onSelectNode={selectNode}
             onSelectChannel={selectChannel}
+            onSelectEdge={selectEdge}
+            onConnectNodes={connectGraphNodes}
+            onDisconnectEdge={disconnectGraphEdge}
             error={error}
             loadState={loadState}
           />
@@ -497,12 +576,15 @@ function App() {
           processorDescriptors={processorDescriptors}
           selectedNodeId={selectedNodeId}
           selectedChannelName={selectedChannelName}
+          selectedEdgeId={selectedEdgeId}
           selectedDiagnosticKey={selectedDiagnosticKey}
           onSelectNode={selectNode}
           onSelectChannel={selectChannel}
+          onSelectEdge={selectEdge}
           onUpdateNodeParameter={updateNodeParameter}
           onUpdateNodeParameterJson={updateNodeParameterJson}
           onUpdateNodeField={updateNodeField}
+          onDisconnectEdge={disconnectGraphEdge}
           saveState={saveState}
         />
       </div>
@@ -656,12 +738,15 @@ function InspectorPanel({
   processorDescriptors,
   selectedNodeId,
   selectedChannelName,
+  selectedEdgeId,
   selectedDiagnosticKey,
   onSelectNode,
   onSelectChannel,
+  onSelectEdge,
   onUpdateNodeParameter,
   onUpdateNodeParameterJson,
   onUpdateNodeField,
+  onDisconnectEdge,
   saveState,
 }: {
   graph: ResolvedPipelineGraph | null;
@@ -669,15 +754,19 @@ function InspectorPanel({
   processorDescriptors: ProcessorDescriptor[];
   selectedNodeId: string | null;
   selectedChannelName: string | null;
+  selectedEdgeId: string | null;
   selectedDiagnosticKey: string | null;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
+  onSelectEdge: (edgeId: string | null) => void;
   onUpdateNodeParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
   onUpdateNodeParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
   onUpdateNodeField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
+  onDisconnectEdge: (targetNodeId: string, channelName: string) => Promise<void>;
   saveState: "idle" | "saving" | "error";
 }) {
   const selectedNode = graph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
+  const selectedEdge = graph?.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
   const selectedChannel =
     graph?.channels.find((channel) => channel.name === selectedChannelName) ?? null;
   const nodeDiagnostics = selectedNode
@@ -705,6 +794,13 @@ function InspectorPanel({
     },
     [onSelectChannel, onSelectNode],
   );
+  const disconnectEdge = useCallback(
+    async (edge: GraphEdge) => {
+      await onDisconnectEdge(edge.target_node_id, edge.channel_name);
+      onSelectEdge(null);
+    },
+    [onDisconnectEdge, onSelectEdge],
+  );
 
   return (
     <aside className="inspector">
@@ -715,6 +811,15 @@ function InspectorPanel({
 
       {!graph ? (
         <p className="empty-state">No graph loaded.</p>
+      ) : selectedEdge ? (
+        <EdgeInspector
+          edge={selectedEdge}
+          graph={graph}
+          saveState={saveState}
+          onSelectNode={selectNode}
+          onSelectChannel={selectChannel}
+          onDisconnectEdge={disconnectEdge}
+        />
       ) : selectedChannel ? (
         <ChannelInspector
           channel={selectedChannel}
@@ -1673,6 +1778,60 @@ function EditableFieldRow({
   );
 }
 
+function EdgeInspector({
+  edge,
+  graph,
+  saveState,
+  onSelectNode,
+  onSelectChannel,
+  onDisconnectEdge,
+}: {
+  edge: GraphEdge;
+  graph: ResolvedPipelineGraph;
+  saveState: "idle" | "saving" | "error";
+  onSelectNode: (id: string | null) => void;
+  onSelectChannel: (channelName: string | null) => void;
+  onDisconnectEdge: (edge: GraphEdge) => Promise<void>;
+}) {
+  const sourceNode = graph.nodes.find((node) => node.id === edge.source_node_id) ?? null;
+  const targetNode = graph.nodes.find((node) => node.id === edge.target_node_id) ?? null;
+  const diagnostics = graph.diagnostics.filter((diagnostic) => diagnostic.channel_name === edge.channel_name);
+
+  return (
+    <div className="inspector-body">
+      <InspectorTitle eyebrow="Connection" title={edge.channel_name} />
+      <div className="edge-actions">
+        <button
+          className="danger-action"
+          disabled={saveState === "saving"}
+          onClick={() => onDisconnectEdge(edge)}
+        >
+          <Trash2 size={15} />
+          <span>{saveState === "saving" ? "Disconnecting" : "Disconnect"}</span>
+        </button>
+      </div>
+      <InspectorSection title="Endpoints" defaultOpen>
+        <div className="endpoint-list">
+          <button onClick={() => onSelectNode(edge.source_node_id)}>
+            <span>Source</span>
+            <strong>{sourceNode?.display_name ?? edge.source_node_id}</strong>
+          </button>
+          <button onClick={() => onSelectNode(edge.target_node_id)}>
+            <span>Target</span>
+            <strong>{targetNode?.display_name ?? edge.target_node_id}</strong>
+          </button>
+          <button onClick={() => onSelectChannel(edge.channel_name)}>
+            <span>Channel</span>
+            <strong>{edge.channel_name}</strong>
+          </button>
+        </div>
+        <KeyValue label="Target input" value={String(edge.target_input_index + 1)} />
+      </InspectorSection>
+      <DiagnosticsList diagnostics={diagnostics} selectedDiagnostic={null} defaultOpen={diagnostics.length > 0} />
+    </div>
+  );
+}
+
 function ChannelInspector({
   channel,
   graph,
@@ -1864,23 +2023,32 @@ function GraphCanvas({
   graph,
   selectedNodeId,
   selectedChannelName,
+  selectedEdgeId,
   selectedDiagnosticKey,
   filterText,
   onSelectNode,
   onSelectChannel,
+  onSelectEdge,
+  onConnectNodes,
+  onDisconnectEdge,
   error,
   loadState,
 }: {
   graph: ResolvedPipelineGraph | null;
   selectedNodeId: string | null;
   selectedChannelName: string | null;
+  selectedEdgeId: string | null;
   selectedDiagnosticKey: string | null;
   filterText: string;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
+  onSelectEdge: (edgeId: string | null) => void;
+  onConnectNodes: (sourceNodeId: string, targetNodeId: string) => Promise<void>;
+  onDisconnectEdge: (targetNodeId: string, channelName: string) => Promise<void>;
   error: string | null;
   loadState: "idle" | "loading" | "error";
 }) {
+  const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
   const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
   const focusState = useMemo(
@@ -1914,6 +2082,11 @@ function GraphCanvas({
           counts[channelName] = diagnosticsByChannel.get(channelName) ?? 0;
           return counts;
         }, {});
+      const connectionState = connectionSourceNodeId
+        ? connectionValidationMessage(graph, connectionSourceNodeId, node.id) === null
+          ? "valid"
+          : "invalid"
+        : null;
 
       return {
         id: node.id,
@@ -1927,6 +2100,7 @@ function GraphCanvas({
           graphNode: node,
           diagnostics: diagnosticsByNode.get(node.id) ?? [],
           channelDiagnosticCounts,
+          connectionState,
           selectedChannelName,
           onSelectChannel,
         },
@@ -1945,6 +2119,7 @@ function GraphCanvas({
     filterText,
     focusState,
     graph,
+    connectionSourceNodeId,
     onSelectChannel,
     selectedChannelName,
     selectedNodeId,
@@ -1970,6 +2145,7 @@ function GraphCanvas({
         sourceHandle: "output-channel",
         targetHandle: `input-channel-${edge.target_input_index}`,
         type: "channelEdge",
+        selected: edge.id === selectedEdgeId,
         markerEnd: {
           type: MarkerType.ArrowClosed,
           color,
@@ -1981,6 +2157,7 @@ function GraphCanvas({
           channelName: edge.channel_name,
           color,
           laneOffset,
+          onSelectEdge,
           pathState,
           severity: severityForDiagnostics(channelDiagnostics),
         },
@@ -1988,7 +2165,7 @@ function GraphCanvas({
         style: { stroke: color, strokeWidth: 2.1 },
       };
     });
-  }, [channelByName, focusState, graph]);
+  }, [channelByName, focusState, graph, onSelectEdge, selectedEdgeId]);
 
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>(flowNodes);
   const [edges, setEdges] = useState<Edge[]>(flowEdges);
@@ -2003,6 +2180,22 @@ function GraphCanvas({
       setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
     },
     [],
+  );
+  const onConnect = useCallback(
+    (connection: Connection) => {
+      if (!connection.source || !connection.target) {
+        return;
+      }
+
+      onConnectNodes(connection.source, connection.target);
+    },
+    [onConnectNodes],
+  );
+  const isValidConnection = useCallback(
+    (connection: Connection | Edge) =>
+      Boolean(connection.source && connection.target) &&
+      connectionValidationMessage(graph, connection.source ?? "", connection.target ?? "") === null,
+    [graph],
   );
 
   useEffect(() => {
@@ -2046,24 +2239,30 @@ function GraphCanvas({
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onConnect={onConnect}
+          isValidConnection={isValidConnection}
+          onConnectStart={(_, params) => setConnectionSourceNodeId(params.nodeId ?? null)}
+          onConnectEnd={() => setConnectionSourceNodeId(null)}
+          onEdgesDelete={(deletedEdges) => {
+            deletedEdges.forEach((edge) => {
+              const channelName = (edge.data as ChannelEdgeData | undefined)?.channelName;
+              if (edge.target && channelName) {
+                onDisconnectEdge(edge.target, channelName);
+              }
+            });
+          }}
           onNodeDragStop={(_, node) => setNodes((currentNodes) => mergeDraggedNode(currentNodes, node))}
           onNodeClick={(_, node) => {
             onSelectNode(node.id);
-            onSelectChannel(null);
           }}
           onEdgeClick={(_, edge) => {
-            const channelName = (edge.data as ChannelEdgeData | undefined)?.channelName;
-            if (channelName) {
-              onSelectChannel(channelName);
-              onSelectNode(null);
-            }
+            onSelectEdge(edge.id);
           }}
           onPaneClick={() => {
             onSelectNode(null);
-            onSelectChannel(null);
           }}
           nodesDraggable
-          nodesConnectable={false}
+          nodesConnectable
           elementsSelectable
           fitView
           fitViewOptions={{ padding: 0.18 }}
@@ -2087,7 +2286,14 @@ function GraphCanvas({
 }
 
 function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
-  const { graphNode, diagnostics, channelDiagnosticCounts, selectedChannelName, onSelectChannel } = data;
+  const {
+    graphNode,
+    diagnostics,
+    channelDiagnosticCounts,
+    connectionState,
+    selectedChannelName,
+    onSelectChannel,
+  } = data;
   const hasError = diagnostics.some((diagnostic) => diagnostic.severity === "error");
   const hasWarning = diagnostics.some((diagnostic) => diagnostic.severity === "warning");
   const diagnosticSeverity = severityForDiagnostics(diagnostics);
@@ -2095,6 +2301,8 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     "liminal-node",
     graphNode.kind,
     selected ? "selected" : "",
+    connectionState === "valid" ? "connection-valid" : "",
+    connectionState === "invalid" ? "connection-invalid" : "",
     hasError ? "has-error" : "",
     hasWarning ? "has-warning" : "",
   ]
@@ -2112,6 +2320,15 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
       <strong>{graphNode.display_name}</strong>
       <p>{graphNode.config_path}</p>
       <div className="node-channels">
+        {graphNode.kind !== "input" && (
+          <Handle
+            className="node-input-drop-handle"
+            id="input-add"
+            type="target"
+            position={Position.Left}
+            isConnectable
+          />
+        )}
         {graphNode.input_channels.map((channel, index) => (
           <button
             key={`${channel}-${index}`}
@@ -2127,7 +2344,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
               id={`input-channel-${index}`}
               type="target"
               position={Position.Left}
-              isConnectable={false}
+              isConnectable
             />
             <span className="channel-text">{channel}</span>
             {(channelDiagnosticCounts[channel] ?? 0) > 0 && (
@@ -2150,7 +2367,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
               id="output-channel"
               type="source"
               position={Position.Right}
-              isConnectable={false}
+              isConnectable
             />
             {(channelDiagnosticCounts[outputChannel] ?? 0) > 0 && (
               <DiagnosticBadge count={channelDiagnosticCounts[outputChannel]} severity="warning" compact />
@@ -2166,6 +2383,7 @@ type ChannelEdgeData = {
   channelName: string;
   color: string;
   laneOffset: number;
+  onSelectEdge?: (edgeId: string) => void;
   pathState: "active" | "muted" | null;
   severity: DiagnosticSeverity | null;
 };
@@ -2187,6 +2405,7 @@ function ChannelEdge({
     channelName: "",
     color: "#67e5d8",
     laneOffset: 0,
+    onSelectEdge: undefined,
     pathState: null,
     severity: null,
   };
@@ -2243,6 +2462,10 @@ function ChannelEdge({
             color: edgeData.color,
           }}
           title={edgeData.channelName}
+          onClick={(event) => {
+            event.stopPropagation();
+            edgeData.onSelectEdge?.(id);
+          }}
         >
           {edgeData.channelName}
         </div>
@@ -2821,6 +3044,49 @@ function diagnosticKey(diagnostic: GraphDiagnostic, index: number) {
     diagnostic.channel_name ?? "",
     diagnostic.node_ids.join(","),
   ].join(":");
+}
+
+function connectionValidationMessage(
+  graph: ResolvedPipelineGraph | null,
+  sourceNodeId: string,
+  targetNodeId: string,
+) {
+  if (!graph) {
+    return "No graph is loaded.";
+  }
+
+  if (!sourceNodeId || !targetNodeId) {
+    return "Select a source and target node.";
+  }
+
+  if (sourceNodeId === targetNodeId) {
+    return "A node cannot be connected to itself.";
+  }
+
+  const sourceNode = graph.nodes.find((node) => node.id === sourceNodeId);
+  const targetNode = graph.nodes.find((node) => node.id === targetNodeId);
+
+  if (!sourceNode) {
+    return `Source node '${sourceNodeId}' was not found.`;
+  }
+
+  if (!targetNode) {
+    return `Target node '${targetNodeId}' was not found.`;
+  }
+
+  if (targetNode.kind === "input") {
+    return "Input stages cannot consume channels.";
+  }
+
+  if (!sourceNode.output_channel) {
+    return `Source node '${sourceNode.display_name}' does not produce an output channel.`;
+  }
+
+  if (targetNode.input_channels.includes(sourceNode.output_channel)) {
+    return `Target node '${targetNode.display_name}' already consumes '${sourceNode.output_channel}'.`;
+  }
+
+  return null;
 }
 
 function graphFocusState(

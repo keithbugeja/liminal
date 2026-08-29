@@ -1,8 +1,8 @@
-use liminal::config::{load_config, ResolvedPipelineGraph};
+use liminal::config::{load_config, Config, ResolvedPipelineGraph};
 use liminal::processors::descriptor::{processor_descriptors, ProcessorDescriptor};
 use std::fs;
 use std::path::{Path, PathBuf};
-use toml_edit::{DocumentMut, Item, Value};
+use toml_edit::{Array, DocumentMut, Item, Value};
 
 #[tauri::command]
 fn load_graph(path: String) -> Result<ResolvedPipelineGraph, String> {
@@ -68,6 +68,79 @@ fn update_node_parameter_json(
         .map_err(|error| format!("Failed to write '{}': {}", resolved_path.display(), error))?;
 
     Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+#[tauri::command]
+fn connect_nodes(
+    path: String,
+    source_node_id: String,
+    target_node_id: String,
+) -> Result<ResolvedPipelineGraph, String> {
+    if source_node_id == target_node_id {
+        return Err("A node cannot be connected to itself".to_string());
+    }
+
+    if target_node_id.starts_with("input:") {
+        return Err("Input stages cannot consume channels".to_string());
+    }
+
+    let resolved_path = resolve_config_path(&path)?;
+    let content = fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))?;
+    let config = toml::from_str::<Config>(&content)
+        .map_err(|error| format!("Failed to parse config before rewiring: {}", error))?;
+    let graph = ResolvedPipelineGraph::from_config(&config);
+    let source_node = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == source_node_id)
+        .ok_or_else(|| format!("Source node '{}' not found", source_node_id))?;
+    let target_node = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == target_node_id)
+        .ok_or_else(|| format!("Target node '{}' not found", target_node_id))?;
+    let channel_name = source_node.output_channel.as_ref().ok_or_else(|| {
+        format!(
+            "Source node '{}' does not produce an output channel",
+            source_node.display_name
+        )
+    })?;
+
+    if target_node.input_channels.iter().any(|input| input == channel_name) {
+        return Err(format!(
+            "Target node '{}' already consumes channel '{}'",
+            target_node.display_name, channel_name
+        ));
+    }
+
+    let mut document = content
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
+
+    add_input_channel(&mut document, &target_node_id, channel_name)?;
+    write_document_and_resolve(&resolved_path, document)
+}
+
+#[tauri::command]
+fn disconnect_edge(
+    path: String,
+    target_node_id: String,
+    channel_name: String,
+) -> Result<ResolvedPipelineGraph, String> {
+    if target_node_id.starts_with("input:") {
+        return Err("Input stages do not have input channel lists".to_string());
+    }
+
+    let resolved_path = resolve_config_path(&path)?;
+    let content = fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))?;
+    let mut document = content
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
+
+    remove_input_channel(&mut document, &target_node_id, &channel_name)?;
+    write_document_and_resolve(&resolved_path, document)
 }
 
 #[tauri::command]
@@ -157,6 +230,20 @@ fn relative_to_repo(path: &Path) -> String {
         .replace('\\', "/")
 }
 
+fn write_document_and_resolve(
+    resolved_path: &Path,
+    document: DocumentMut,
+) -> Result<ResolvedPipelineGraph, String> {
+    let next_content = document.to_string();
+    let config = toml::from_str(&next_content)
+        .map_err(|error| format!("Edited TOML no longer parses: {}", error))?;
+
+    fs::write(resolved_path, next_content)
+        .map_err(|error| format!("Failed to write '{}': {}", resolved_path.display(), error))?;
+
+    Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
 fn update_existing_parameter(
     document: &mut DocumentMut,
     node_id: &str,
@@ -218,6 +305,67 @@ fn update_json_parameter(
             node_id
         ))
     }
+}
+
+fn add_input_channel(
+    document: &mut DocumentMut,
+    target_node_id: &str,
+    channel_name: &str,
+) -> Result<(), String> {
+    let stage = stage_item_mut(document, target_node_id)?;
+    let inputs = inputs_array_mut(stage)?;
+
+    if inputs
+        .iter()
+        .any(|input| input.as_str() == Some(channel_name))
+    {
+        return Err(format!("Channel '{}' is already connected", channel_name));
+    }
+
+    inputs.push(channel_name);
+    Ok(())
+}
+
+fn remove_input_channel(
+    document: &mut DocumentMut,
+    target_node_id: &str,
+    channel_name: &str,
+) -> Result<(), String> {
+    let stage = stage_item_mut(document, target_node_id)?;
+    let inputs = inputs_array_mut(stage)?;
+    let mut next_inputs = Array::default();
+    let mut removed = false;
+
+    for input in inputs.iter() {
+        let Some(input_name) = input.as_str() else {
+            return Err("Stage inputs must be string channel names".to_string());
+        };
+
+        if input_name == channel_name {
+            removed = true;
+        } else {
+            next_inputs.push(input_name);
+        }
+    }
+
+    if !removed {
+        return Err(format!("Channel '{}' is not connected", channel_name));
+    }
+
+    *inputs = next_inputs;
+    Ok(())
+}
+
+fn inputs_array_mut(stage: &mut Item) -> Result<&mut Array, String> {
+    if stage.get("inputs").is_none() {
+        stage["inputs"] = toml_edit::value(Array::default());
+    }
+
+    stage
+        .get_mut("inputs")
+        .and_then(Item::as_value_mut)
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "Stage inputs are not editable as an array".to_string())
 }
 
 fn toml_item_from_json(value: &serde_json::Value) -> Result<Item, String> {
@@ -521,6 +669,8 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             load_graph,
+            connect_nodes,
+            disconnect_edge,
             list_example_configs,
             list_processor_descriptors,
             update_node_field,
@@ -858,6 +1008,60 @@ actions = [{ type = "pass_through" }]
                 ["condition"]["field_path"],
             "temperature"
         );
+    }
+
+    #[test]
+    fn adds_input_channel_when_connecting_nodes() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+
+[outputs.console]
+type = "console"
+"#,
+        );
+
+        add_input_channel(&mut document, "output:console", "raw_data")
+            .expect("input channel is added");
+
+        let edited = document.to_string();
+        assert!(edited.contains("inputs = [\"raw_data\"]"));
+    }
+
+    #[test]
+    fn rejects_duplicate_input_channel_connection() {
+        let mut document = parse_document(
+            r#"
+[outputs.console]
+type = "console"
+inputs = ["raw_data"]
+"#,
+        );
+
+        let error = add_input_channel(&mut document, "output:console", "raw_data")
+            .expect_err("duplicate input channel is rejected");
+
+        assert!(error.contains("already connected"));
+    }
+
+    #[test]
+    fn removes_input_channel_when_disconnects_edge() {
+        let mut document = parse_document(
+            r#"
+[outputs.console]
+type = "console"
+inputs = ["raw_data", "filtered_data"]
+"#,
+        );
+
+        remove_input_channel(&mut document, "output:console", "raw_data")
+            .expect("input channel is removed");
+
+        let edited = document.to_string();
+        assert!(!edited.contains("\"raw_data\""));
+        assert!(edited.contains("\"filtered_data\""));
     }
 
     #[test]
