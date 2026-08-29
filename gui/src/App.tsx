@@ -155,6 +155,11 @@ type FocusState = {
   activeEdgeIds: Set<string>;
 };
 
+type ValidationIssue = {
+  path: string;
+  message: string;
+};
+
 const laneX: Record<GraphLane, number> = {
   inputs: 40,
   pipeline_stages: 460,
@@ -1070,6 +1075,10 @@ function RuleParameterEditor({
   const [draftRules, setDraftRules] = useState<JsonValue[]>(Array.isArray(value) ? value : []);
   const actionSchema = ruleActionSchema(schema);
   const isDirty = JSON.stringify(draftRules) !== JSON.stringify(Array.isArray(value) ? value : []);
+  const validationIssues = useMemo(
+    () => validateRules(draftRules, actionSchema),
+    [actionSchema, draftRules],
+  );
 
   useEffect(() => {
     setDraftRules(Array.isArray(value) ? value : []);
@@ -1092,12 +1101,13 @@ function RuleParameterEditor({
           Revert
         </button>
         <button
-          disabled={!isDirty || saveState === "saving"}
+          disabled={!isDirty || saveState === "saving" || validationIssues.length > 0}
           onClick={() => onUpdateParameterJson(nodeId, parameterKey, draftRules)}
         >
           {saveState === "saving" ? "Saving" : "Save Rules"}
         </button>
       </div>
+      {validationIssues.length > 0 && <RuleValidationSummary issues={validationIssues} />}
       {draftRules.length === 0 ? (
         <p className="empty-state">No rules configured.</p>
       ) : (
@@ -1107,6 +1117,7 @@ function RuleParameterEditor({
             rule={rule}
             index={index}
             actionSchema={actionSchema}
+            issues={validationIssues.filter((issue) => issue.path.startsWith(`rules.${index}.`))}
             onChange={(nextRule) => {
               setDraftRules((currentRules) =>
                 currentRules.map((currentRule, currentIndex) => (currentIndex === index ? nextRule : currentRule)),
@@ -1129,6 +1140,7 @@ function RuleCard({
   rule,
   index,
   actionSchema,
+  issues,
   onChange,
   onMove,
   onRemove,
@@ -1138,6 +1150,7 @@ function RuleCard({
   rule: JsonValue;
   index: number;
   actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+  issues: ValidationIssue[];
   onChange: (rule: JsonValue) => void;
   onMove: (direction: -1 | 1) => void;
   onRemove: () => void;
@@ -1171,6 +1184,7 @@ function RuleCard({
         <RuleInput
           label="Field"
           value={formatJsonValue(condition.field_path ?? "")}
+          issue={issueForPath(issues, `condition.field_path`)}
           onChange={(nextValue) =>
             onChange(setObjectValue(ruleObject, ["condition", "field_path"], nextValue))
           }
@@ -1179,6 +1193,7 @@ function RuleCard({
           label="Operation"
           value={typeof condition.operation === "string" ? condition.operation : "equals"}
           options={conditionOperationOptions}
+          issue={issueForPath(issues, `condition.operation`)}
           onChange={(nextValue) =>
             onChange(setObjectValue(ruleObject, ["condition", "operation"], nextValue))
           }
@@ -1186,6 +1201,7 @@ function RuleCard({
         <RuleInput
           label="Value"
           value={formatJsonValue(condition.value ?? "")}
+          issue={issueForPath(issues, `condition.value`)}
           onChange={(nextValue) =>
             onChange(setObjectValue(ruleObject, ["condition", "value"], parseJsonLikeValue(nextValue)))
           }
@@ -1196,12 +1212,14 @@ function RuleCard({
         title="Actions"
         actions={actions}
         actionSchema={actionSchema}
+        issues={issues.filter((issue) => issue.path.startsWith("actions."))}
         onChange={(nextActions) => onChange({ ...ruleObject, actions: nextActions })}
       />
       <RuleActionList
         title="Else Actions"
         actions={elseActions}
         actionSchema={actionSchema}
+        issues={issues.filter((issue) => issue.path.startsWith("else_actions."))}
         onChange={(nextActions) => onChange({ ...ruleObject, else_actions: nextActions })}
       />
     </div>
@@ -1212,11 +1230,13 @@ function RuleActionList({
   title,
   actions,
   actionSchema,
+  issues,
   onChange,
 }: {
   title: string;
   actions: JsonValue[];
   actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+  issues: ValidationIssue[];
   onChange: (actions: JsonValue[]) => void;
 }) {
   return (
@@ -1243,6 +1263,9 @@ function RuleActionList({
               action={action}
               index={index}
               actionSchema={actionSchema}
+              issues={issues
+                .filter((issue) => issue.path.startsWith(`${index}.`))
+                .map((issue) => ({ ...issue, path: issue.path.replace(`${index}.`, "") }))}
               onChange={(nextAction) => {
                 onChange(
                   actions.map((currentAction, currentIndex) =>
@@ -1266,6 +1289,7 @@ function RuleActionCard({
   action,
   index,
   actionSchema,
+  issues,
   onChange,
   onMove,
   onRemove,
@@ -1275,6 +1299,7 @@ function RuleActionCard({
   action: JsonValue;
   index: number;
   actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null;
+  issues: ValidationIssue[];
   onChange: (action: JsonValue) => void;
   onMove: (direction: -1 | 1) => void;
   onRemove: () => void;
@@ -1304,6 +1329,7 @@ function RuleActionCard({
         <span>Action {index + 1}</span>
         {actionSchema ? (
           <select
+            className={issueForPath(issues, "type") ? "invalid" : ""}
             value={type}
             onChange={(event) => onChange(defaultActionForVariant(actionSchema, event.target.value))}
           >
@@ -1334,6 +1360,7 @@ function RuleActionCard({
             key={field.key}
             field={field}
             value={actionObject[field.key] ?? ""}
+            issue={issueForPath(issues, field.key)}
             onChange={(nextValue) => onChange({ ...actionObject, [field.key]: nextValue })}
           />
         ))}
@@ -1342,31 +1369,46 @@ function RuleActionCard({
   );
 }
 
+function RuleValidationSummary({ issues }: { issues: ValidationIssue[] }) {
+  return (
+    <div className="rule-validation">
+      <strong>{issues.length} issue{issues.length === 1 ? "" : "s"}</strong>
+      {issues.slice(0, 4).map((issue) => (
+        <p key={`${issue.path}-${issue.message}`}>{issue.message}</p>
+      ))}
+      {issues.length > 4 && <p>{issues.length - 4} more.</p>}
+    </div>
+  );
+}
+
 function RuleFieldEditor({
   field,
   value,
+  issue,
   onChange,
 }: {
   field: FieldSpec;
   value: JsonValue;
+  issue?: ValidationIssue;
   onChange: (value: JsonValue) => void;
 }) {
   if (field.kind === "boolean") {
     return (
-      <label className="rule-datum rule-checkbox">
+      <label className={["rule-datum", "rule-checkbox", issue ? "invalid" : ""].join(" ")}>
         <span>{field.label}</span>
         <input
           type="checkbox"
           checked={value === true}
           onChange={(event) => onChange(event.target.checked)}
         />
+        {issue && <small>{issue.message}</small>}
       </label>
     );
   }
 
   if (field.kind === "enum" && field.options.length > 0) {
     return (
-      <label className="rule-datum">
+      <label className={["rule-datum", issue ? "invalid" : ""].join(" ")}>
         <span>{field.label}</span>
         <select
           value={typeof value === "string" ? value : field.options[0]}
@@ -1374,10 +1416,11 @@ function RuleFieldEditor({
         >
           {field.options.map((option) => (
             <option key={option} value={option}>
-              {option}
-            </option>
-          ))}
+            {option}
+          </option>
+        ))}
         </select>
+        {issue && <small>{issue.message}</small>}
       </label>
     );
   }
@@ -1386,6 +1429,7 @@ function RuleFieldEditor({
     <RuleInput
       label={field.label}
       value={formatJsonValue(value)}
+      issue={issue}
       onChange={(nextValue) =>
         onChange(field.kind === "json_value" ? parseJsonLikeValue(nextValue) : nextValue)
       }
@@ -1396,16 +1440,19 @@ function RuleFieldEditor({
 function RuleInput({
   label,
   value,
+  issue,
   onChange,
 }: {
   label: string;
   value: string;
+  issue?: ValidationIssue;
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="rule-datum">
+    <label className={["rule-datum", issue ? "invalid" : ""].join(" ")}>
       <span>{label}</span>
-      <input value={value} onChange={(event) => onChange(event.target.value)} />
+      <input className={issue ? "invalid" : ""} value={value} onChange={(event) => onChange(event.target.value)} />
+      {issue && <small>{issue.message}</small>}
     </label>
   );
 }
@@ -1414,23 +1461,26 @@ function RuleSelect({
   label,
   value,
   options,
+  issue,
   onChange,
 }: {
   label: string;
   value: string;
   options: string[];
+  issue?: ValidationIssue;
   onChange: (value: string) => void;
 }) {
   return (
-    <label className="rule-datum">
+    <label className={["rule-datum", issue ? "invalid" : ""].join(" ")}>
       <span>{label}</span>
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
+      <select className={issue ? "invalid" : ""} value={value} onChange={(event) => onChange(event.target.value)}>
         {options.map((option) => (
           <option key={option} value={option}>
             {option}
           </option>
         ))}
       </select>
+      {issue && <small>{issue.message}</small>}
     </label>
   );
 }
@@ -2265,6 +2315,145 @@ function selectOptionsForValue(fieldSpec: FieldSpec, value: string) {
   }
 
   return [value, ...fieldSpec.options];
+}
+
+function validateRules(
+  rules: JsonValue[],
+  actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null,
+) {
+  const issues: ValidationIssue[] = [];
+
+  if (rules.length === 0) {
+    issues.push({ path: "rules", message: "At least one rule is required." });
+  }
+
+  rules.forEach((rule, ruleIndex) => {
+    const rulePath = `rules.${ruleIndex}`;
+    const ruleObject = isJsonObject(rule) ? rule : {};
+    const condition = isJsonObject(ruleObject.condition) ? ruleObject.condition : {};
+    const actions = Array.isArray(ruleObject.actions) ? ruleObject.actions : [];
+    const elseActions = Array.isArray(ruleObject.else_actions) ? ruleObject.else_actions : [];
+    const fieldPath = condition.field_path;
+    const operation = condition.operation;
+
+    if (typeof fieldPath !== "string" || fieldPath.trim().length === 0) {
+      issues.push({
+        path: `${rulePath}.condition.field_path`,
+        message: `Rule ${ruleIndex + 1}: field path is required.`,
+      });
+    }
+
+    if (typeof operation !== "string" || !conditionOperationOptions.includes(operation)) {
+      issues.push({
+        path: `${rulePath}.condition.operation`,
+        message: `Rule ${ruleIndex + 1}: operation is not supported.`,
+      });
+    }
+
+    if (["<", "<=", ">", ">="].includes(typeof operation === "string" ? operation : "")) {
+      const conditionValue = condition.value;
+      if (typeof conditionValue !== "number") {
+        issues.push({
+          path: `${rulePath}.condition.value`,
+          message: `Rule ${ruleIndex + 1}: comparison value must be numeric.`,
+        });
+      }
+    }
+
+    if (actions.length === 0) {
+      issues.push({
+        path: `${rulePath}.actions`,
+        message: `Rule ${ruleIndex + 1}: at least one action is required.`,
+      });
+    }
+
+    validateRuleActions(actions, `${rulePath}.actions`, `Rule ${ruleIndex + 1} action`, actionSchema, issues);
+    validateRuleActions(
+      elseActions,
+      `${rulePath}.else_actions`,
+      `Rule ${ruleIndex + 1} else action`,
+      actionSchema,
+      issues,
+    );
+  });
+
+  return issues;
+}
+
+function validateRuleActions(
+  actions: JsonValue[],
+  path: string,
+  label: string,
+  actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }> | null,
+  issues: ValidationIssue[],
+) {
+  actions.forEach((action, actionIndex) => {
+    const actionPath = `${path}.${actionIndex}`;
+    const actionObject = isJsonObject(action) ? action : {};
+    const type = actionObject.type;
+    const variant =
+      typeof type === "string"
+        ? actionSchema?.variants.find((candidate) => candidate.tag_value === type)
+        : undefined;
+
+    if (typeof type !== "string" || !variant) {
+      issues.push({
+        path: `${actionPath}.type`,
+        message: `${label} ${actionIndex + 1}: action type is not supported.`,
+      });
+      return;
+    }
+
+    variant.fields.forEach((field) => {
+      const value = actionObject[field.key];
+      if (!field.required || !isEmptyRequiredValue(value)) {
+        return;
+      }
+
+      issues.push({
+        path: `${actionPath}.${field.key}`,
+        message: `${label} ${actionIndex + 1}: ${field.label.toLowerCase()} is required.`,
+      });
+    });
+
+    if (
+      type === "copy_field" &&
+      typeof actionObject.source_field === "string" &&
+      actionObject.source_field === actionObject.target_field
+    ) {
+      issues.push({
+        path: `${actionPath}.target_field`,
+        message: `${label} ${actionIndex + 1}: source and target must differ.`,
+      });
+    }
+
+    if (
+      type === "rename_field" &&
+      typeof actionObject.old_field === "string" &&
+      actionObject.old_field === actionObject.new_field
+    ) {
+      issues.push({
+        path: `${actionPath}.new_field`,
+        message: `${label} ${actionIndex + 1}: old and new fields must differ.`,
+      });
+    }
+  });
+}
+
+function isEmptyRequiredValue(value: JsonValue | undefined) {
+  if (value === undefined || value === null) {
+    return true;
+  }
+
+  if (typeof value === "string") {
+    return value.trim().length === 0;
+  }
+
+  return false;
+}
+
+function issueForPath(issues: ValidationIssue[], path: string) {
+  return issues.find((issue) => issue.path === path || issue.path.endsWith(`.${path}`));
 }
 
 function isJsonObject(value: JsonValue): value is { [key: string]: JsonValue } {
