@@ -28,6 +28,7 @@ import {
   Boxes,
   CircleDot,
   Copy,
+  FilePlus,
   FileJson,
   FolderOpen,
   GitBranch,
@@ -458,7 +459,7 @@ function App() {
   }, [configPath, loadGraph, requestDiscardOrRun]);
 
   const copyIntoWorkspace = useCallback(async () => {
-    if (!draftContent) {
+    if (draftContent === null) {
       setError("No editable draft is loaded.");
       setSaveState("error");
       return;
@@ -498,7 +499,7 @@ function App() {
   }, [configPath, draftContent, refreshWorkspaceConfigs, workspacePath]);
 
   const saveDraftAs = useCallback(async () => {
-    if (!draftContent) {
+    if (draftContent === null) {
       setError("No editable draft is loaded.");
       setSaveState("error");
       return;
@@ -542,6 +543,58 @@ function App() {
       setSaveState("error");
     }
   }, [configPath, draftContent]);
+
+  const createNewConfigFile = useCallback(async () => {
+    let selectedPath: string | null;
+    try {
+      selectedPath = await invoke<string | null>("pick_save_config_path", {
+        defaultPath: workspacePath ? `${workspacePath}/config.toml` : "config.toml",
+      });
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+      return;
+    }
+
+    if (typeof selectedPath !== "string") {
+      return;
+    }
+
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const emptyContent = "";
+      const nextGraph = await invoke<ResolvedPipelineGraph>("save_config_as", {
+        path: selectedPath,
+        content: emptyContent,
+      });
+      setGraph(nextGraph);
+      setConfigPath(selectedPath);
+      setLoadedConfigPath(selectedPath);
+      setSavedContent(emptyContent);
+      setDraftContent(emptyContent);
+      setRecentConfigPaths(writeStoredRecentConfig(selectedPath));
+      setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
+      setSelectedChannelName(null);
+      setSelectedEdgeId(null);
+      setSelectedDiagnosticKey(null);
+      setSaveState("idle");
+      await refreshWorkspaceConfigs(workspacePath);
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+    }
+  }, [refreshWorkspaceConfigs, workspacePath]);
+
+  const newConfigFile = useCallback(() => {
+    requestDiscardOrRun({
+      title: "New Config",
+      detail: "Discard the current unsaved draft and create a new empty TOML config?",
+      confirmLabel: "Discard and Create",
+      run: createNewConfigFile,
+    });
+  }, [createNewConfigFile, requestDiscardOrRun]);
 
   useEffect(() => {
     invoke<string[]>("list_example_configs")
@@ -681,7 +734,7 @@ function App() {
   );
   const updateNodeParameter = useCallback(
     async (nodeId: string, parameterKey: string, value: string) => {
-      if (!draftContent) {
+      if (draftContent === null) {
         setError("No editable draft is loaded.");
         setSaveState("error");
         return;
@@ -707,7 +760,7 @@ function App() {
   );
   const updateNodeParameterJson = useCallback(
     async (nodeId: string, parameterKey: string, value: JsonValue) => {
-      if (!draftContent) {
+      if (draftContent === null) {
         setError("No editable draft is loaded.");
         setSaveState("error");
         return;
@@ -733,7 +786,7 @@ function App() {
   );
   const connectGraphNodes = useCallback(
     async (sourceNodeId: string, targetNodeId: string) => {
-      if (!draftContent) {
+      if (draftContent === null) {
         setError("No editable draft is loaded.");
         setSaveState("error");
         return;
@@ -765,7 +818,7 @@ function App() {
   );
   const disconnectGraphEdge = useCallback(
     async (targetNodeId: string, channelName: string) => {
-      if (!draftContent) {
+      if (draftContent === null) {
         setError("No editable draft is loaded.");
         setSaveState("error");
         return;
@@ -795,7 +848,7 @@ function App() {
       processorCategory: ProcessorCategory,
       pipelineName: string | null,
     ) => {
-      if (!draftContent) {
+      if (draftContent === null) {
         setError("No editable draft is loaded.");
         setSaveState("error");
         return;
@@ -838,7 +891,7 @@ function App() {
       return;
     }
 
-    if (!draftContent) {
+    if (draftContent === null) {
       setError("No editable draft is loaded.");
       setSaveState("error");
       setPendingDelete(null);
@@ -863,7 +916,7 @@ function App() {
   }, [applyDraftEdit, draftContent, pendingDelete]);
   const updateNodeField = useCallback(
     async (nodeId: string, fieldKey: string, value: string) => {
-      if (!draftContent) {
+      if (draftContent === null) {
         setError("No editable draft is loaded.");
         setSaveState("error");
         return;
@@ -888,7 +941,7 @@ function App() {
     [applyDraftEdit, draftContent],
   );
   const saveDraft = useCallback(async () => {
-    if (!draftContent || !isDirty) {
+    if (draftContent === null || !isDirty) {
       return;
     }
 
@@ -941,6 +994,12 @@ function App() {
         return;
       }
 
+      if (hasPrimaryModifier && key === "n") {
+        event.preventDefault();
+        newConfigFile();
+        return;
+      }
+
       if (hasPrimaryModifier && key === "r") {
         event.preventDefault();
         if (event.shiftKey) {
@@ -974,6 +1033,7 @@ function App() {
     return () => window.removeEventListener("keydown", handleShortcut);
   }, [
     configPath,
+    newConfigFile,
     openConfigFile,
     openWorkspaceFolder,
     pendingDelete,
@@ -1086,6 +1146,7 @@ function App() {
                 onClearRecent={() => setRecentConfigPaths(clearStoredRecentConfigs())}
                 onCopyIntoWorkspace={copyIntoWorkspace}
                 onLoadConfig={openConfigPath}
+                onNewConfig={newConfigFile}
                 onOpenFile={openConfigFile}
                 onOpenFolder={openWorkspaceFolder}
                 onPathChange={setConfigPath}
@@ -1364,6 +1425,7 @@ function ConfigBrowserPanel({
   onClearRecent,
   onCopyIntoWorkspace,
   onLoadConfig,
+  onNewConfig,
   onOpenFile,
   onOpenFolder,
   onPathChange,
@@ -1386,6 +1448,7 @@ function ConfigBrowserPanel({
   onClearRecent: () => void;
   onCopyIntoWorkspace: () => void;
   onLoadConfig: (path: string) => void;
+  onNewConfig: () => void;
   onOpenFile: () => void;
   onOpenFolder: () => void;
   onPathChange: (path: string) => void;
@@ -1397,7 +1460,7 @@ function ConfigBrowserPanel({
 }) {
   const canCopyIntoWorkspace =
     Boolean(workspacePath) &&
-    Boolean(draftContent) &&
+    draftContent !== null &&
     !pathMatchesAny(configPath, workspaceConfigs);
 
   return (
@@ -1457,15 +1520,19 @@ function ConfigBrowserPanel({
       </div>
 
       <div className="file-action-row">
+        <button onClick={onNewConfig} title="New empty TOML config" aria-label="New empty TOML config">
+          <FilePlus size={15} />
+          <span>New</span>
+        </button>
         <button onClick={onOpenFile}>
           <FileJson size={15} />
-          <span>Open File</span>
+          <span>Open</span>
         </button>
         <button onClick={onOpenFolder}>
           <FolderOpen size={15} />
-          <span>Open Folder</span>
+          <span>Folder</span>
         </button>
-        <button onClick={onSaveAs} disabled={!draftContent || saveState === "saving"}>
+        <button onClick={onSaveAs} disabled={draftContent === null || saveState === "saving"}>
           <Save size={15} />
           <span>Save As</span>
         </button>

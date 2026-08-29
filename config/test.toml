@@ -1,0 +1,12 @@
+[inputs]
+
+[inputs.simulated]
+type = "simulated"
+output = "simulated_data"
+parameters = { interval_ms = 1000, distribution = "uniform", min_value = 0.0, max_value = 100.0 }
+
+[outputs]
+
+[outputs.console]
+type = "console"
+inputs = ["simulated_data"]
