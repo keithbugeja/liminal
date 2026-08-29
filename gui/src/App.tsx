@@ -23,6 +23,7 @@ import {
 } from "@xyflow/react";
 import {
   AlertCircle,
+  AlertTriangle,
   Boxes,
   CircleDot,
   FileJson,
@@ -30,16 +31,20 @@ import {
   Info,
   Loader2,
   Network,
+  Plus,
   RefreshCw,
+  RotateCcw,
+  Save,
   Search,
   Trash2,
 } from "lucide-react";
-import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 type GraphNodeKind = "input" | "pipeline_stage" | "output";
 type GraphLane = "inputs" | "pipeline_stages" | "outputs";
 type DiagnosticSeverity = "warning" | "error";
 type DiagnosticsFilter = "all" | "errors" | "warnings";
+type SaveState = "idle" | "dirty" | "saving" | "error";
 
 type ResolvedPipelineGraph = {
   schema_version: number;
@@ -48,6 +53,11 @@ type ResolvedPipelineGraph = {
   edges: GraphEdge[];
   channels: GraphChannel[];
   diagnostics: GraphDiagnostic[];
+};
+
+type DraftEditResult = {
+  graph: ResolvedPipelineGraph;
+  content: string;
 };
 
 type GraphSummary = {
@@ -158,6 +168,21 @@ type FocusState = {
   activeEdgeIds: Set<string>;
 };
 
+type DeleteImpact = {
+  outputChannel: string | null;
+  downstreamNodes: GraphNode[];
+};
+
+type LayoutPosition = {
+  x: number;
+  y: number;
+};
+
+type PendingDelete = {
+  node: GraphNode;
+  impact: DeleteImpact;
+};
+
 type ValidationIssue = {
   path: string;
   message: string;
@@ -182,6 +207,7 @@ const defaultInspectorWidth = 520;
 const minInspectorWidth = 330;
 const maxInspectorWidth = 980;
 const inspectorWidthStorageKey = "liminal.inspectorWidth";
+const layoutStoragePrefix = "liminal.layout.";
 const conditionOperationOptions = [
   "equals",
   "not_equals",
@@ -209,17 +235,37 @@ function App() {
   const [diagnosticsFilter, setDiagnosticsFilter] = useState<DiagnosticsFilter>("all");
   const [filterText, setFilterText] = useState("");
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
-  const [saveState, setSaveState] = useState<"idle" | "saving" | "error">("idle");
+  const [saveState, setSaveState] = useState<SaveState>("idle");
   const [error, setError] = useState<string | null>(null);
+  const [savedContent, setSavedContent] = useState<string | null>(null);
+  const [draftContent, setDraftContent] = useState<string | null>(null);
   const [inspectorWidth, setInspectorWidth] = useState(readStoredInspectorWidth);
+  const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
+  const isDirty = savedContent !== null && draftContent !== null && savedContent !== draftContent;
+
+  const applyDraftEdit = useCallback(
+    (edit: DraftEditResult, selectedNodeId: string | null, selectedEdgeId: string | null = null) => {
+      setGraph(edit.graph);
+      setDraftContent(edit.content);
+      setSelectedNodeId(selectedNodeId);
+      setSelectedChannelName(null);
+      setSelectedEdgeId(selectedEdgeId);
+      setSelectedDiagnosticKey(null);
+      setSaveState("dirty");
+    },
+    [],
+  );
 
   const loadGraph = useCallback(async (path: string) => {
     setLoadState("loading");
     setError(null);
 
     try {
+      const nextContent = await invoke<string>("load_config_text", { path });
       const nextGraph = await invoke<ResolvedPipelineGraph>("load_graph", { path });
       setGraph(nextGraph);
+      setSavedContent(nextContent);
+      setDraftContent(nextContent);
       setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
       setSelectedChannelName(null);
       setSelectedEdgeId(null);
@@ -228,6 +274,8 @@ function App() {
       setSaveState("idle");
     } catch (caught) {
       setGraph(null);
+      setSavedContent(null);
+      setDraftContent(null);
       setSelectedNodeId(null);
       setSelectedChannelName(null);
       setSelectedEdgeId(null);
@@ -305,56 +353,64 @@ function App() {
   );
   const updateNodeParameter = useCallback(
     async (nodeId: string, parameterKey: string, value: string) => {
+      if (!draftContent) {
+        setError("No editable draft is loaded.");
+        setSaveState("error");
+        return;
+      }
+
       setSaveState("saving");
       setError(null);
 
       try {
-        const nextGraph = await invoke<ResolvedPipelineGraph>("update_node_parameter", {
-          path: configPath,
+        const edit = await invoke<DraftEditResult>("update_node_parameter_draft", {
+          content: draftContent,
           nodeId,
           parameterKey,
           value,
         });
-        setGraph(nextGraph);
-        setSelectedNodeId(nodeId);
-        setSelectedChannelName(null);
-        setSelectedEdgeId(null);
-        setSelectedDiagnosticKey(null);
-        setSaveState("idle");
+        applyDraftEdit(edit, nodeId);
       } catch (caught) {
         setError(String(caught));
         setSaveState("error");
       }
     },
-    [configPath],
+    [applyDraftEdit, draftContent],
   );
   const updateNodeParameterJson = useCallback(
     async (nodeId: string, parameterKey: string, value: JsonValue) => {
+      if (!draftContent) {
+        setError("No editable draft is loaded.");
+        setSaveState("error");
+        return;
+      }
+
       setSaveState("saving");
       setError(null);
 
       try {
-        const nextGraph = await invoke<ResolvedPipelineGraph>("update_node_parameter_json", {
-          path: configPath,
+        const edit = await invoke<DraftEditResult>("update_node_parameter_json_draft", {
+          content: draftContent,
           nodeId,
           parameterKey,
           valueJson: JSON.stringify(value),
         });
-        setGraph(nextGraph);
-        setSelectedNodeId(nodeId);
-        setSelectedChannelName(null);
-        setSelectedEdgeId(null);
-        setSelectedDiagnosticKey(null);
-        setSaveState("idle");
+        applyDraftEdit(edit, nodeId);
       } catch (caught) {
         setError(String(caught));
         setSaveState("error");
       }
     },
-    [configPath],
+    [applyDraftEdit, draftContent],
   );
   const connectGraphNodes = useCallback(
     async (sourceNodeId: string, targetNodeId: string) => {
+      if (!draftContent) {
+        setError("No editable draft is loaded.");
+        setSaveState("error");
+        return;
+      }
+
       const validationMessage = connectionValidationMessage(graph, sourceNodeId, targetNodeId);
       if (validationMessage) {
         setError(validationMessage);
@@ -366,73 +422,171 @@ function App() {
       setError(null);
 
       try {
-        const nextGraph = await invoke<ResolvedPipelineGraph>("connect_nodes", {
-          path: configPath,
+        const edit = await invoke<DraftEditResult>("connect_nodes_draft", {
+          content: draftContent,
           sourceNodeId,
           targetNodeId,
         });
-        setGraph(nextGraph);
-        setSelectedNodeId(targetNodeId);
-        setSelectedChannelName(null);
-        setSelectedEdgeId(null);
-        setSelectedDiagnosticKey(null);
-        setSaveState("idle");
+        applyDraftEdit(edit, targetNodeId);
       } catch (caught) {
         setError(String(caught));
         setSaveState("error");
       }
     },
-    [configPath, graph],
+    [applyDraftEdit, draftContent, graph],
   );
   const disconnectGraphEdge = useCallback(
     async (targetNodeId: string, channelName: string) => {
+      if (!draftContent) {
+        setError("No editable draft is loaded.");
+        setSaveState("error");
+        return;
+      }
+
       setSaveState("saving");
       setError(null);
 
       try {
-        const nextGraph = await invoke<ResolvedPipelineGraph>("disconnect_edge", {
-          path: configPath,
+        const edit = await invoke<DraftEditResult>("disconnect_edge_draft", {
+          content: draftContent,
           targetNodeId,
           channelName,
         });
-        setGraph(nextGraph);
-        setSelectedNodeId(targetNodeId);
-        setSelectedChannelName(null);
-        setSelectedEdgeId(null);
-        setSelectedDiagnosticKey(null);
-        setSaveState("idle");
+        applyDraftEdit(edit, targetNodeId);
       } catch (caught) {
         setError(String(caught));
         setSaveState("error");
       }
     },
-    [configPath],
+    [applyDraftEdit, draftContent],
   );
-  const updateNodeField = useCallback(
-    async (nodeId: string, fieldKey: string, value: string) => {
+  const addGraphNode = useCallback(
+    async (
+      processorType: string,
+      nodeName: string,
+      processorCategory: ProcessorCategory,
+      pipelineName: string | null,
+    ) => {
+      if (!draftContent) {
+        setError("No editable draft is loaded.");
+        setSaveState("error");
+        return;
+      }
+
       setSaveState("saving");
       setError(null);
 
       try {
-        const nextGraph = await invoke<ResolvedPipelineGraph>("update_node_field", {
-          path: configPath,
+        const edit = await invoke<DraftEditResult>("add_node_draft", {
+          content: draftContent,
+          processorType,
+          nodeName,
+          pipelineName,
+        });
+        applyDraftEdit(edit, nodeIdForNewNode(processorCategory, nodeName, pipelineName));
+      } catch (caught) {
+        setError(String(caught));
+        setSaveState("error");
+      }
+    },
+    [applyDraftEdit, draftContent],
+  );
+  const deleteGraphNode = useCallback(
+    async (nodeId: string) => {
+      const node = graph?.nodes.find((candidate) => candidate.id === nodeId) ?? null;
+      if (!graph || !node) {
+        setError(`Node '${nodeId}' was not found.`);
+        setSaveState("error");
+        return;
+      }
+
+      const impact = deletionImpact(graph, node);
+      setPendingDelete({ node, impact });
+    },
+    [graph],
+  );
+  const confirmDeleteGraphNode = useCallback(async () => {
+    if (!pendingDelete) {
+      return;
+    }
+
+    if (!draftContent) {
+      setError("No editable draft is loaded.");
+      setSaveState("error");
+      setPendingDelete(null);
+      return;
+    }
+
+    const nodeId = pendingDelete.node.id;
+    setSaveState("saving");
+    setError(null);
+    setPendingDelete(null);
+
+    try {
+      const edit = await invoke<DraftEditResult>("delete_node_draft", {
+        content: draftContent,
+        nodeId,
+      });
+      applyDraftEdit(edit, edit.graph.nodes[0]?.id ?? null);
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+    }
+  }, [applyDraftEdit, draftContent, pendingDelete]);
+  const updateNodeField = useCallback(
+    async (nodeId: string, fieldKey: string, value: string) => {
+      if (!draftContent) {
+        setError("No editable draft is loaded.");
+        setSaveState("error");
+        return;
+      }
+
+      setSaveState("saving");
+      setError(null);
+
+      try {
+        const edit = await invoke<DraftEditResult>("update_node_field_draft", {
+          content: draftContent,
           nodeId,
           fieldKey,
           value,
         });
-        setGraph(nextGraph);
-        setSelectedNodeId(nodeId);
-        setSelectedChannelName(null);
-        setSelectedEdgeId(null);
-        setSelectedDiagnosticKey(null);
-        setSaveState("idle");
+        applyDraftEdit(edit, nodeId);
       } catch (caught) {
         setError(String(caught));
         setSaveState("error");
       }
     },
-    [configPath],
+    [applyDraftEdit, draftContent],
   );
+  const saveDraft = useCallback(async () => {
+    if (!draftContent || !isDirty) {
+      return;
+    }
+
+    setSaveState("saving");
+    setError(null);
+
+    try {
+      const nextGraph = await invoke<ResolvedPipelineGraph>("save_config_text", {
+        path: configPath,
+        content: draftContent,
+      });
+      setGraph(nextGraph);
+      setSavedContent(draftContent);
+      setSaveState("idle");
+    } catch (caught) {
+      setError(String(caught));
+      setSaveState("error");
+    }
+  }, [configPath, draftContent, isDirty]);
+  const revertDraft = useCallback(() => {
+    if (!savedContent) {
+      return;
+    }
+
+    loadGraph(configPath);
+  }, [configPath, loadGraph, savedContent]);
   const startInspectorResize = useCallback(
     (event: ReactMouseEvent<HTMLDivElement>) => {
       event.preventDefault();
@@ -502,6 +656,24 @@ function App() {
                 <RefreshCw size={17} />
               )}
             </button>
+            <button
+              className="icon-button"
+              onClick={saveDraft}
+              disabled={!isDirty || saveState === "saving"}
+              aria-label="Save draft"
+              title="Save draft"
+            >
+              {saveState === "saving" ? <Loader2 className="spin" size={17} /> : <Save size={17} />}
+            </button>
+            <button
+              className="icon-button"
+              onClick={revertDraft}
+              disabled={!isDirty || saveState === "saving"}
+              aria-label="Revert draft"
+              title="Revert draft"
+            >
+              <RotateCcw size={17} />
+            </button>
           </div>
 
           <div className="example-list">
@@ -529,8 +701,21 @@ function App() {
             />
           </div>
 
+          <AddNodePanel
+            graph={graph}
+            processorDescriptors={processorDescriptors}
+            saveState={saveState}
+            onAddNode={addGraphNode}
+          />
+
           <SummaryPanel graph={graph} />
-          <GraphStatusPanel graph={graph} loadState={loadState} saveState={saveState} error={error} />
+          <GraphStatusPanel
+            graph={graph}
+            loadState={loadState}
+            saveState={saveState}
+            error={error}
+            isDirty={isDirty}
+          />
           <DiagnosticsPanel
             graph={graph}
             filter={diagnosticsFilter}
@@ -545,6 +730,7 @@ function App() {
         <main className="workspace">
           <GraphCanvas
             graph={graph}
+            configPath={configPath}
             selectedNodeId={selectedNodeId}
             selectedChannelName={selectedChannelName}
             selectedEdgeId={selectedEdgeId}
@@ -555,6 +741,7 @@ function App() {
             onSelectEdge={selectEdge}
             onConnectNodes={connectGraphNodes}
             onDisconnectEdge={disconnectGraphEdge}
+            onDeleteNode={deleteGraphNode}
             error={error}
             loadState={loadState}
           />
@@ -585,8 +772,17 @@ function App() {
           onUpdateNodeParameterJson={updateNodeParameterJson}
           onUpdateNodeField={updateNodeField}
           onDisconnectEdge={disconnectGraphEdge}
+          onDeleteNode={deleteGraphNode}
           saveState={saveState}
         />
+        {pendingDelete && (
+          <DeleteNodeDialog
+            pendingDelete={pendingDelete}
+            saveState={saveState}
+            onCancel={() => setPendingDelete(null)}
+            onConfirm={confirmDeleteGraphNode}
+          />
+        )}
       </div>
     </ReactFlowProvider>
   );
@@ -616,13 +812,15 @@ function GraphStatusPanel({
   loadState,
   saveState,
   error,
+  isDirty,
 }: {
   graph: ResolvedPipelineGraph | null;
   loadState: "idle" | "loading" | "error";
-  saveState: "idle" | "saving" | "error";
+  saveState: SaveState;
   error: string | null;
+  isDirty: boolean;
 }) {
-  const status = graphStatus(graph, loadState, saveState, error);
+  const status = graphStatus(graph, loadState, saveState, error, isDirty);
 
   return (
     <section className={`status-panel ${status.severity}`}>
@@ -640,6 +838,139 @@ function Metric({ label, value }: { label: string; value: number }) {
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
+  );
+}
+
+function AddNodePanel({
+  graph,
+  processorDescriptors,
+  saveState,
+  onAddNode,
+}: {
+  graph: ResolvedPipelineGraph | null;
+  processorDescriptors: ProcessorDescriptor[];
+  saveState: SaveState;
+  onAddNode: (
+    processorType: string,
+    nodeName: string,
+    processorCategory: ProcessorCategory,
+    pipelineName: string | null,
+  ) => Promise<void>;
+}) {
+  const descriptors = useMemo(
+    () =>
+      [...processorDescriptors].sort(
+        (left, right) =>
+          categoryOrder(left.category) - categoryOrder(right.category) ||
+          left.display_name.localeCompare(right.display_name),
+      ),
+    [processorDescriptors],
+  );
+  const [processorType, setProcessorType] = useState("");
+  const [nodeName, setNodeName] = useState("");
+  const [pipelineName, setPipelineName] = useState("");
+  const selectedDescriptor =
+    descriptors.find((descriptor) => descriptor.type_name === processorType) ?? descriptors[0] ?? null;
+  const pipelineOptions = useMemo(() => pipelineNames(graph), [graph]);
+  const needsPipeline =
+    selectedDescriptor?.category === "transform" || selectedDescriptor?.category === "aggregator";
+  const normalizedNodeName = nodeName.trim();
+  const normalizedPipelineName = pipelineName.trim() || pipelineOptions[0] || "default_pipeline";
+  const validationMessage = selectedDescriptor
+    ? addNodeValidationMessage(graph, selectedDescriptor.category, normalizedNodeName, normalizedPipelineName)
+    : "Processor descriptors are not loaded.";
+
+  useEffect(() => {
+    if (!selectedDescriptor) {
+      return;
+    }
+
+    if (processorType !== selectedDescriptor.type_name) {
+      setProcessorType(selectedDescriptor.type_name);
+    }
+  }, [processorType, selectedDescriptor]);
+
+  useEffect(() => {
+    if (selectedDescriptor) {
+      setNodeName(defaultNodeName(graph, selectedDescriptor));
+    }
+  }, [graph, selectedDescriptor?.type_name]);
+
+  useEffect(() => {
+    setPipelineName((currentName) => currentName || pipelineOptions[0] || "default_pipeline");
+  }, [pipelineOptions]);
+
+  return (
+    <section className="panel add-node-panel">
+      <div className="panel-title">
+        <Plus size={16} />
+        <span>Add Node</span>
+      </div>
+      <form
+        className="add-node-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!selectedDescriptor || validationMessage) {
+            return;
+          }
+
+          onAddNode(
+            selectedDescriptor.type_name,
+            normalizedNodeName,
+            selectedDescriptor.category,
+            needsPipeline ? normalizedPipelineName : null,
+          );
+        }}
+      >
+        <label>
+          <span>Processor</span>
+          <select
+            value={selectedDescriptor?.type_name ?? ""}
+            onChange={(event) => setProcessorType(event.target.value)}
+            disabled={descriptors.length === 0}
+          >
+            {descriptors.map((descriptor) => (
+              <option key={descriptor.type_name} value={descriptor.type_name}>
+                {descriptor.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Name</span>
+          <input
+            value={nodeName}
+            onChange={(event) => setNodeName(event.target.value)}
+            placeholder="node_name"
+            aria-label="New node name"
+          />
+        </label>
+        {needsPipeline && (
+          <label>
+            <span>Pipeline</span>
+            <input
+              value={pipelineName}
+              onChange={(event) => setPipelineName(event.target.value)}
+              list="pipeline-options"
+              placeholder="default_pipeline"
+              aria-label="Pipeline name"
+            />
+            <datalist id="pipeline-options">
+              {pipelineOptions.map((name) => (
+                <option key={name} value={name} />
+              ))}
+            </datalist>
+          </label>
+        )}
+        <div className="add-node-footer">
+          <span>{selectedDescriptor?.category ?? "processor"}</span>
+          <button disabled={saveState === "saving" || Boolean(validationMessage)}>
+            {saveState === "saving" ? "Adding" : "Add"}
+          </button>
+        </div>
+        {validationMessage && <p className="form-hint">{validationMessage}</p>}
+      </form>
+    </section>
   );
 }
 
@@ -747,6 +1078,7 @@ function InspectorPanel({
   onUpdateNodeParameterJson,
   onUpdateNodeField,
   onDisconnectEdge,
+  onDeleteNode,
   saveState,
 }: {
   graph: ResolvedPipelineGraph | null;
@@ -763,7 +1095,8 @@ function InspectorPanel({
   onUpdateNodeParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
   onUpdateNodeField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
   onDisconnectEdge: (targetNodeId: string, channelName: string) => Promise<void>;
-  saveState: "idle" | "saving" | "error";
+  onDeleteNode: (nodeId: string) => Promise<void>;
+  saveState: SaveState;
 }) {
   const selectedNode = graph?.nodes.find((node) => node.id === selectedNodeId) ?? null;
   const selectedEdge = graph?.edges.find((edge) => edge.id === selectedEdgeId) ?? null;
@@ -846,6 +1179,7 @@ function InspectorPanel({
           onUpdateParameter={onUpdateNodeParameter}
           onUpdateParameterJson={onUpdateNodeParameterJson}
           onUpdateField={onUpdateNodeField}
+          onDeleteNode={onDeleteNode}
           saveState={saveState}
         />
       ) : (
@@ -869,6 +1203,7 @@ function NodeInspector({
   onUpdateParameter,
   onUpdateParameterJson,
   onUpdateField,
+  onDeleteNode,
   saveState,
 }: {
   node: GraphNode;
@@ -881,7 +1216,8 @@ function NodeInspector({
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
   onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
   onUpdateField: (nodeId: string, fieldKey: string, value: string) => Promise<void>;
-  saveState: "idle" | "saving" | "error";
+  onDeleteNode: (nodeId: string) => Promise<void>;
+  saveState: SaveState;
 }) {
   const incomingEdges = graph.edges.filter((edge) => edge.target_node_id === node.id);
   const outgoingEdges = graph.edges.filter((edge) => edge.source_node_id === node.id);
@@ -899,6 +1235,16 @@ function NodeInspector({
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow={node.processor_type} title={node.display_name} />
+      <div className="edge-actions">
+        <button
+          className="danger-action"
+          disabled={saveState === "saving"}
+          onClick={() => onDeleteNode(node.id)}
+        >
+          <Trash2 size={15} />
+          <span>{saveState === "saving" ? "Deleting" : "Delete Node"}</span>
+        </button>
+      </div>
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
       <InspectorSection title="Overview" defaultOpen>
         {processorDescriptor && (
@@ -1064,7 +1410,7 @@ function ParameterRow({
   nodeId: string;
   parameter: GraphParameter;
   fieldSpec?: FieldSpec;
-  saveState: "idle" | "saving" | "error";
+  saveState: SaveState;
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
   onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
 }) {
@@ -1174,7 +1520,7 @@ function RuleParameterEditor({
   parameterKey: string;
   value: JsonValue;
   schema: SchemaSpec;
-  saveState: "idle" | "saving" | "error";
+  saveState: SaveState;
   onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
 }) {
   const [draftRules, setDraftRules] = useState<JsonValue[]>(Array.isArray(value) ? value : []);
@@ -1731,7 +2077,7 @@ function EditableFieldRow({
   value: string;
   valueKind: "string" | "number" | "enum" | "boolean";
   options?: string[];
-  saveState: "idle" | "saving" | "error";
+  saveState: SaveState;
   onSave: (value: string) => Promise<void>;
 }) {
   const [draftValue, setDraftValue] = useState(value);
@@ -1778,6 +2124,92 @@ function EditableFieldRow({
   );
 }
 
+function DeleteNodeDialog({
+  pendingDelete,
+  saveState,
+  onCancel,
+  onConfirm,
+}: {
+  pendingDelete: PendingDelete;
+  saveState: SaveState;
+  onCancel: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const { node, impact } = pendingDelete;
+  const isSaving = saveState === "saving";
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isSaving) {
+        onCancel();
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [isSaving, onCancel]);
+
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={() => !isSaving && onCancel()}>
+      <section
+        className="confirm-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-node-title"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="confirm-dialog-header">
+          <div className="confirm-dialog-icon">
+            <AlertTriangle size={20} />
+          </div>
+          <div>
+            <span>Delete Node</span>
+            <h2 id="delete-node-title">{node.display_name}</h2>
+          </div>
+        </div>
+
+        <div className="confirm-dialog-body">
+          <KeyValue label="Processor" value={node.processor_type} />
+          <KeyValue label="Config path" value={node.config_path} />
+          {impact.outputChannel ? (
+            <div className="delete-impact">
+              <span>Output cleanup</span>
+              <strong>{impact.outputChannel}</strong>
+              {impact.downstreamNodes.length > 0 ? (
+                <>
+                  <p>This channel will be removed from downstream inputs:</p>
+                  <div className="impact-node-list">
+                    {impact.downstreamNodes.map((downstreamNode) => (
+                      <code key={downstreamNode.id}>{downstreamNode.display_name}</code>
+                    ))}
+                  </div>
+                </>
+              ) : (
+                <p>No downstream consumers use this output channel.</p>
+              )}
+            </div>
+          ) : (
+            <div className="delete-impact">
+              <span>Output cleanup</span>
+              <p>This node does not produce a channel.</p>
+            </div>
+          )}
+        </div>
+
+        <div className="confirm-dialog-actions">
+          <button className="secondary-action" disabled={isSaving} onClick={onCancel}>
+            Cancel
+          </button>
+          <button className="danger-action" disabled={isSaving} onClick={onConfirm}>
+            <Trash2 size={15} />
+            <span>{isSaving ? "Deleting" : "Delete Node"}</span>
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function EdgeInspector({
   edge,
   graph,
@@ -1788,7 +2220,7 @@ function EdgeInspector({
 }: {
   edge: GraphEdge;
   graph: ResolvedPipelineGraph;
-  saveState: "idle" | "saving" | "error";
+  saveState: SaveState;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
   onDisconnectEdge: (edge: GraphEdge) => Promise<void>;
@@ -2021,6 +2453,7 @@ function DiagnosticsList({
 
 function GraphCanvas({
   graph,
+  configPath,
   selectedNodeId,
   selectedChannelName,
   selectedEdgeId,
@@ -2031,10 +2464,12 @@ function GraphCanvas({
   onSelectEdge,
   onConnectNodes,
   onDisconnectEdge,
+  onDeleteNode,
   error,
   loadState,
 }: {
   graph: ResolvedPipelineGraph | null;
+  configPath: string;
   selectedNodeId: string | null;
   selectedChannelName: string | null;
   selectedEdgeId: string | null;
@@ -2045,10 +2480,14 @@ function GraphCanvas({
   onSelectEdge: (edgeId: string | null) => void;
   onConnectNodes: (sourceNodeId: string, targetNodeId: string) => Promise<void>;
   onDisconnectEdge: (targetNodeId: string, channelName: string) => Promise<void>;
+  onDeleteNode: (nodeId: string) => Promise<void>;
   error: string | null;
   loadState: "idle" | "loading" | "error";
 }) {
   const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
+  const [layoutRevision, setLayoutRevision] = useState(0);
+  const previousConfigPath = useRef(configPath);
+  const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
   const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
   const focusState = useMemo(
@@ -2063,7 +2502,7 @@ function GraphCanvas({
 
   const flowNodes = useMemo<Node<FlowNodeData>[]>(() => {
     const query = filterText.trim().toLowerCase();
-    const positions = layoutNodePositions(graph?.nodes ?? []);
+    const positions = layoutNodePositions(graph?.nodes ?? [], savedLayout);
 
     return (graph?.nodes ?? []).map((node) => {
       const channels = [...node.input_channels, node.output_channel ?? ""]
@@ -2121,6 +2560,7 @@ function GraphCanvas({
     graph,
     connectionSourceNodeId,
     onSelectChannel,
+    savedLayout,
     selectedChannelName,
     selectedNodeId,
   ]);
@@ -2171,9 +2611,18 @@ function GraphCanvas({
   const [edges, setEdges] = useState<Edge[]>(flowEdges);
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<FlowNodeData>>[]) => {
-      setNodes((currentNodes) => applyNodeChanges<Node<FlowNodeData>>(changes, currentNodes));
+      const removeChanges = changes.filter((change) => change.type === "remove");
+      const localChanges = changes.filter((change) => change.type !== "remove");
+
+      removeChanges.forEach((change) => {
+        onDeleteNode(change.id);
+      });
+
+      if (localChanges.length > 0) {
+        setNodes((currentNodes) => applyNodeChanges<Node<FlowNodeData>>(localChanges, currentNodes));
+      }
     },
-    [],
+    [onDeleteNode],
   );
   const onEdgesChange = useCallback(
     (changes: EdgeChange[]) => {
@@ -2199,17 +2648,25 @@ function GraphCanvas({
   );
 
   useEffect(() => {
-    setNodes((currentNodes) =>
-      flowNodes.map((flowNode) => {
-        const currentNode = currentNodes.find((node) => node.id === flowNode.id);
-        return currentNode ? { ...flowNode, position: currentNode.position } : flowNode;
-      }),
-    );
-  }, [flowNodes, setNodes]);
+    setNodes((currentNodes) => {
+      if (previousConfigPath.current !== configPath) {
+        previousConfigPath.current = configPath;
+        return flowNodes;
+      }
+
+      return mergeFlowNodeMetadata(currentNodes, flowNodes);
+    });
+  }, [configPath, flowNodes, setNodes]);
 
   useEffect(() => {
     setEdges(flowEdges);
   }, [flowEdges, setEdges]);
+
+  useEffect(() => {
+    if (graph) {
+      pruneStoredLayout(configPath, graph.nodes);
+    }
+  }, [configPath, graph]);
 
   if (loadState === "error") {
     return (
@@ -2231,6 +2688,19 @@ function GraphCanvas({
   return (
     <div className="canvas-shell">
       <LaneLabels graph={graph} />
+      <div className="layout-toolbar">
+        <button
+          onClick={() => {
+            clearStoredLayout(configPath);
+            setNodes(automaticFlowNodes(flowNodes, graph.nodes));
+            setLayoutRevision((revision) => revision + 1);
+          }}
+          title="Reset node layout"
+          aria-label="Reset node layout"
+        >
+          <RotateCcw size={15} />
+        </button>
+      </div>
       <div className="flow-area">
         <ReactFlow
           nodes={nodes}
@@ -2251,7 +2721,11 @@ function GraphCanvas({
               }
             });
           }}
-          onNodeDragStop={(_, node) => setNodes((currentNodes) => mergeDraggedNode(currentNodes, node))}
+          onNodeDragStop={(_, node) => {
+            writeStoredNodePosition(configPath, node.id, node.position);
+            setNodes((currentNodes) => mergeDraggedNode(currentNodes, node));
+            setLayoutRevision((revision) => revision + 1);
+          }}
           onNodeClick={(_, node) => {
             onSelectNode(node.id);
           }}
@@ -2493,6 +2967,25 @@ function channelBezierPath(
 
 function mergeDraggedNode(nodes: Node<FlowNodeData>[], draggedNode: Node<FlowNodeData>) {
   return nodes.map((node) => (node.id === draggedNode.id ? draggedNode : node));
+}
+
+function mergeFlowNodeMetadata(
+  currentNodes: Node<FlowNodeData>[],
+  nextNodes: Node<FlowNodeData>[],
+) {
+  return nextNodes.map((nextNode) => {
+    const currentNode = currentNodes.find((node) => node.id === nextNode.id);
+    return currentNode ? { ...nextNode, position: currentNode.position } : nextNode;
+  });
+}
+
+function automaticFlowNodes(nextNodes: Node<FlowNodeData>[], graphNodes: GraphNode[]) {
+  const automaticPositions = layoutNodePositions(graphNodes, {});
+
+  return nextNodes.map((node) => ({
+    ...node,
+    position: automaticPositions.get(node.id) ?? node.position,
+  }));
 }
 
 function channelClassName(kindClass: string, channelName: string, selectedChannelName: string | null) {
@@ -2915,8 +3408,9 @@ function diagnosticsByNodeId(graph: ResolvedPipelineGraph | null) {
 function graphStatus(
   graph: ResolvedPipelineGraph | null,
   loadState: "idle" | "loading" | "error",
-  saveState: "idle" | "saving" | "error",
+  saveState: SaveState,
   error: string | null,
+  isDirty: boolean,
 ) {
   if (loadState === "loading") {
     return {
@@ -2938,7 +3432,7 @@ function graphStatus(
     return {
       severity: "loading",
       label: "Saving",
-      detail: "Writing parameter edit and resolving graph.",
+      detail: "Writing the current draft to disk.",
     };
   }
 
@@ -2947,6 +3441,14 @@ function graphStatus(
       severity: "error",
       label: "Edit Rejected",
       detail: error ?? "The parameter edit could not be saved.",
+    };
+  }
+
+  if (saveState === "dirty" || isDirty) {
+    return {
+      severity: "warning",
+      label: "Unsaved Draft",
+      detail: "Edits are staged in the GUI. Save to write the TOML file.",
     };
   }
 
@@ -3166,6 +3668,105 @@ function configFileName(path: string) {
   return parts[parts.length - 1] || path;
 }
 
+function deletionImpact(graph: ResolvedPipelineGraph, node: GraphNode): DeleteImpact {
+  if (!node.output_channel) {
+    return { outputChannel: null, downstreamNodes: [] };
+  }
+
+  const downstreamNodeIds = new Set(
+    graph.edges
+      .filter((edge) => edge.source_node_id === node.id && edge.channel_name === node.output_channel)
+      .map((edge) => edge.target_node_id),
+  );
+
+  return {
+    outputChannel: node.output_channel,
+    downstreamNodes: graph.nodes.filter((candidate) => downstreamNodeIds.has(candidate.id)),
+  };
+}
+
+function categoryOrder(category: ProcessorCategory) {
+  return category === "input" ? 0 : category === "transform" ? 1 : category === "aggregator" ? 2 : 3;
+}
+
+function pipelineNames(graph: ResolvedPipelineGraph | null) {
+  const names = new Set<string>();
+
+  graph?.nodes.forEach((node) => {
+    if (node.pipeline_name) {
+      names.add(node.pipeline_name);
+    }
+  });
+
+  return [...names].sort();
+}
+
+function defaultNodeName(graph: ResolvedPipelineGraph | null, descriptor: ProcessorDescriptor) {
+  const baseName = sanitizeNodeName(descriptor.type_name) || "node";
+  const existingNames = new Set(graph?.nodes.map((node) => node.display_name) ?? []);
+
+  if (!existingNames.has(baseName)) {
+    return baseName;
+  }
+
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${baseName}_${index}`;
+    if (!existingNames.has(candidate)) {
+      return candidate;
+    }
+  }
+
+  return `${baseName}_${Date.now()}`;
+}
+
+function sanitizeNodeName(value: string) {
+  return value
+    .trim()
+    .replace(/[^A-Za-z0-9_-]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
+function addNodeValidationMessage(
+  graph: ResolvedPipelineGraph | null,
+  category: ProcessorCategory,
+  nodeName: string,
+  pipelineName: string,
+) {
+  if (!nodeName) {
+    return "Enter a node name.";
+  }
+
+  if (!/^[A-Za-z0-9_-]+$/.test(nodeName)) {
+    return "Use letters, numbers, underscores, or hyphens.";
+  }
+
+  if ((category === "transform" || category === "aggregator") && !pipelineName) {
+    return "Enter a pipeline name.";
+  }
+
+  if (pipelineName && !/^[A-Za-z0-9_-]+$/.test(pipelineName)) {
+    return "Pipeline names use the same characters as node names.";
+  }
+
+  if (graph?.nodes.some((node) => node.id === nodeIdForNewNode(category, nodeName, pipelineName))) {
+    return "A node with this name already exists.";
+  }
+
+  return null;
+}
+
+function nodeIdForNewNode(category: ProcessorCategory, nodeName: string, pipelineName: string | null) {
+  if (category === "input") {
+    return `input:${nodeName}`;
+  }
+
+  if (category === "output") {
+    return `output:${nodeName}`;
+  }
+
+  return `pipeline:${pipelineName || "default_pipeline"}.stage:${nodeName}`;
+}
+
 function readStoredInspectorWidth() {
   const storedWidth = window.localStorage.getItem(inspectorWidthStorageKey);
   const parsedWidth = storedWidth ? Number(storedWidth) : defaultInspectorWidth;
@@ -3177,7 +3778,57 @@ function clampInspectorWidth(width: number) {
   return Math.min(Math.max(Math.round(width), minInspectorWidth), maxInspectorWidth);
 }
 
-function layoutNodePositions(nodes: GraphNode[]) {
+function readStoredLayout(configPath: string): Record<string, LayoutPosition> {
+  try {
+    const storedLayout = window.localStorage.getItem(layoutStorageKey(configPath));
+    if (!storedLayout) {
+      return {};
+    }
+
+    const parsedLayout = JSON.parse(storedLayout) as Record<string, LayoutPosition>;
+    return Object.fromEntries(
+      Object.entries(parsedLayout).filter(
+        ([, position]) =>
+          Number.isFinite(position?.x) &&
+          Number.isFinite(position?.y),
+      ),
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredNodePosition(configPath: string, nodeId: string, position: LayoutPosition) {
+  const layout = readStoredLayout(configPath);
+  layout[nodeId] = {
+    x: Math.round(position.x),
+    y: Math.round(position.y),
+  };
+
+  window.localStorage.setItem(layoutStorageKey(configPath), JSON.stringify(layout));
+}
+
+function pruneStoredLayout(configPath: string, nodes: GraphNode[]) {
+  const layout = readStoredLayout(configPath);
+  const nodeIds = new Set(nodes.map((node) => node.id));
+  const prunedLayout = Object.fromEntries(
+    Object.entries(layout).filter(([nodeId]) => nodeIds.has(nodeId)),
+  );
+
+  if (Object.keys(prunedLayout).length !== Object.keys(layout).length) {
+    window.localStorage.setItem(layoutStorageKey(configPath), JSON.stringify(prunedLayout));
+  }
+}
+
+function clearStoredLayout(configPath: string) {
+  window.localStorage.removeItem(layoutStorageKey(configPath));
+}
+
+function layoutStorageKey(configPath: string) {
+  return `${layoutStoragePrefix}${configPath}`;
+}
+
+function layoutNodePositions(nodes: GraphNode[], savedLayout: Record<string, LayoutPosition>) {
   const positions = new Map<string, { x: number; y: number }>();
 
   (["inputs", "pipeline_stages", "outputs"] as GraphLane[]).forEach((lane) => {
@@ -3187,7 +3838,7 @@ function layoutNodePositions(nodes: GraphNode[]) {
     let y = laneTop;
 
     laneNodes.forEach((node) => {
-      positions.set(node.id, { x: laneX[lane], y });
+      positions.set(node.id, savedLayout[node.id] ?? { x: laneX[lane], y });
       y += estimatedNodeHeight(node) + nodeGap;
     });
   });

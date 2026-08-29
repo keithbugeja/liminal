@@ -1,8 +1,17 @@
 use liminal::config::{load_config, Config, ResolvedPipelineGraph};
-use liminal::processors::descriptor::{processor_descriptors, ProcessorDescriptor};
+use liminal::processors::descriptor::{
+    processor_descriptors, FieldKind, FieldSpec, ProcessorCategory, ProcessorDescriptor,
+};
+use serde::Serialize;
 use std::fs;
 use std::path::{Path, PathBuf};
-use toml_edit::{Array, DocumentMut, Item, Value};
+use toml_edit::{Array, DocumentMut, Item, Table, Value};
+
+#[derive(Serialize)]
+struct DraftEditResult {
+    graph: ResolvedPipelineGraph,
+    content: String,
+}
 
 #[tauri::command]
 fn load_graph(path: String) -> Result<ResolvedPipelineGraph, String> {
@@ -16,6 +25,126 @@ fn load_graph(path: String) -> Result<ResolvedPipelineGraph, String> {
     })?;
 
     Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+#[tauri::command]
+fn load_config_text(path: String) -> Result<String, String> {
+    let resolved_path = resolve_config_path(&path)?;
+    fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))
+}
+
+#[tauri::command]
+fn save_config_text(path: String, content: String) -> Result<ResolvedPipelineGraph, String> {
+    let resolved_path = resolve_config_path(&path)?;
+    let config = toml::from_str::<Config>(&content)
+        .map_err(|error| format!("Edited TOML no longer parses: {}", error))?;
+
+    fs::write(&resolved_path, content)
+        .map_err(|error| format!("Failed to write '{}': {}", resolved_path.display(), error))?;
+
+    Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+#[tauri::command]
+fn update_node_parameter_draft(
+    content: String,
+    node_id: String,
+    parameter_key: String,
+    value: String,
+) -> Result<DraftEditResult, String> {
+    let mut document = document_from_content(&content)?;
+    update_existing_parameter(&mut document, &node_id, &parameter_key, &value)?;
+    draft_result_from_document(document)
+}
+
+#[tauri::command]
+fn update_node_parameter_json_draft(
+    content: String,
+    node_id: String,
+    parameter_key: String,
+    value_json: String,
+) -> Result<DraftEditResult, String> {
+    let value = serde_json::from_str::<serde_json::Value>(&value_json)
+        .map_err(|error| format!("Failed to parse parameter JSON: {}", error))?;
+    let mut document = document_from_content(&content)?;
+    update_json_parameter(&mut document, &node_id, &parameter_key, &value)?;
+    draft_result_from_document(document)
+}
+
+#[tauri::command]
+fn update_node_field_draft(
+    content: String,
+    node_id: String,
+    field_key: String,
+    value: String,
+) -> Result<DraftEditResult, String> {
+    let mut document = document_from_content(&content)?;
+    update_existing_field(&mut document, &node_id, &field_key, &value)?;
+    draft_result_from_document(document)
+}
+
+#[tauri::command]
+fn connect_nodes_draft(
+    content: String,
+    source_node_id: String,
+    target_node_id: String,
+) -> Result<DraftEditResult, String> {
+    let channel_name = channel_for_connection(&content, &source_node_id, &target_node_id)?;
+    let mut document = document_from_content(&content)?;
+    add_input_channel(&mut document, &target_node_id, &channel_name)?;
+    draft_result_from_document(document)
+}
+
+#[tauri::command]
+fn disconnect_edge_draft(
+    content: String,
+    target_node_id: String,
+    channel_name: String,
+) -> Result<DraftEditResult, String> {
+    if target_node_id.starts_with("input:") {
+        return Err("Input stages do not have input channel lists".to_string());
+    }
+
+    let mut document = document_from_content(&content)?;
+    remove_input_channel(&mut document, &target_node_id, &channel_name)?;
+    draft_result_from_document(document)
+}
+
+#[tauri::command]
+fn add_node_draft(
+    content: String,
+    processor_type: String,
+    node_name: String,
+    pipeline_name: Option<String>,
+) -> Result<DraftEditResult, String> {
+    let descriptor = descriptor_for_type(&processor_type)?;
+    let node_name = node_name.trim();
+    validate_node_name(node_name)?;
+
+    let mut document = document_from_content(&content)?;
+    add_node_to_document(&mut document, &descriptor, node_name, pipeline_name.as_deref())?;
+    draft_result_from_document(document)
+}
+
+#[tauri::command]
+fn delete_node_draft(content: String, node_id: String) -> Result<DraftEditResult, String> {
+    let graph = graph_from_content(&content, "deleting node")?;
+    let output_channel = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id)
+        .ok_or_else(|| format!("Node '{}' not found", node_id))?
+        .output_channel
+        .clone();
+    let mut document = document_from_content(&content)?;
+
+    delete_node_from_document(&mut document, &node_id)?;
+    if let Some(channel_name) = output_channel {
+        remove_channel_from_all_inputs(&mut document, &channel_name)?;
+    }
+
+    draft_result_from_document(document)
 }
 
 #[tauri::command]
@@ -76,49 +205,15 @@ fn connect_nodes(
     source_node_id: String,
     target_node_id: String,
 ) -> Result<ResolvedPipelineGraph, String> {
-    if source_node_id == target_node_id {
-        return Err("A node cannot be connected to itself".to_string());
-    }
-
-    if target_node_id.starts_with("input:") {
-        return Err("Input stages cannot consume channels".to_string());
-    }
-
     let resolved_path = resolve_config_path(&path)?;
     let content = fs::read_to_string(&resolved_path)
         .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))?;
-    let config = toml::from_str::<Config>(&content)
-        .map_err(|error| format!("Failed to parse config before rewiring: {}", error))?;
-    let graph = ResolvedPipelineGraph::from_config(&config);
-    let source_node = graph
-        .nodes
-        .iter()
-        .find(|node| node.id == source_node_id)
-        .ok_or_else(|| format!("Source node '{}' not found", source_node_id))?;
-    let target_node = graph
-        .nodes
-        .iter()
-        .find(|node| node.id == target_node_id)
-        .ok_or_else(|| format!("Target node '{}' not found", target_node_id))?;
-    let channel_name = source_node.output_channel.as_ref().ok_or_else(|| {
-        format!(
-            "Source node '{}' does not produce an output channel",
-            source_node.display_name
-        )
-    })?;
-
-    if target_node.input_channels.iter().any(|input| input == channel_name) {
-        return Err(format!(
-            "Target node '{}' already consumes channel '{}'",
-            target_node.display_name, channel_name
-        ));
-    }
-
+    let channel_name = channel_for_connection(&content, &source_node_id, &target_node_id)?;
     let mut document = content
         .parse::<DocumentMut>()
         .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
 
-    add_input_channel(&mut document, &target_node_id, channel_name)?;
+    add_input_channel(&mut document, &target_node_id, &channel_name)?;
     write_document_and_resolve(&resolved_path, document)
 }
 
@@ -140,6 +235,56 @@ fn disconnect_edge(
         .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
 
     remove_input_channel(&mut document, &target_node_id, &channel_name)?;
+    write_document_and_resolve(&resolved_path, document)
+}
+
+#[tauri::command]
+fn delete_node(path: String, node_id: String) -> Result<ResolvedPipelineGraph, String> {
+    let resolved_path = resolve_config_path(&path)?;
+    let content = fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))?;
+    let config = toml::from_str::<Config>(&content)
+        .map_err(|error| format!("Failed to parse config before deleting node: {}", error))?;
+    let graph = ResolvedPipelineGraph::from_config(&config);
+    let output_channel = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == node_id)
+        .ok_or_else(|| format!("Node '{}' not found", node_id))?
+        .output_channel
+        .clone();
+    let mut document = content
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
+
+    delete_node_from_document(&mut document, &node_id)?;
+    if let Some(channel_name) = output_channel {
+        remove_channel_from_all_inputs(&mut document, &channel_name)?;
+    }
+
+    write_document_and_resolve(&resolved_path, document)
+}
+
+#[tauri::command]
+fn add_node(
+    path: String,
+    processor_type: String,
+    node_name: String,
+    pipeline_name: Option<String>,
+) -> Result<ResolvedPipelineGraph, String> {
+    let resolved_path = resolve_config_path(&path)?;
+    let descriptor = descriptor_for_type(&processor_type)?;
+    let node_name = node_name.trim();
+
+    validate_node_name(node_name)?;
+
+    let content = fs::read_to_string(&resolved_path)
+        .map_err(|error| format!("Failed to read '{}': {}", resolved_path.display(), error))?;
+    let mut document = content
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse TOML for editing: {}", error))?;
+
+    add_node_to_document(&mut document, &descriptor, node_name, pipeline_name.as_deref())?;
     write_document_and_resolve(&resolved_path, document)
 }
 
@@ -242,6 +387,78 @@ fn write_document_and_resolve(
         .map_err(|error| format!("Failed to write '{}': {}", resolved_path.display(), error))?;
 
     Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+fn document_from_content(content: &str) -> Result<DocumentMut, String> {
+    content
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse TOML for editing: {}", error))
+}
+
+fn draft_result_from_document(document: DocumentMut) -> Result<DraftEditResult, String> {
+    let content = document.to_string();
+    let graph = graph_from_content(&content, "editing draft")?;
+
+    Ok(DraftEditResult { graph, content })
+}
+
+fn graph_from_content(content: &str, action: &str) -> Result<ResolvedPipelineGraph, String> {
+    let config = toml::from_str::<Config>(content)
+        .map_err(|error| format!("Failed to parse config before {}: {}", action, error))?;
+
+    Ok(ResolvedPipelineGraph::from_config(&config))
+}
+
+fn descriptor_for_type(processor_type: &str) -> Result<ProcessorDescriptor, String> {
+    processor_descriptors()
+        .into_iter()
+        .find(|descriptor| descriptor.type_name == processor_type)
+        .ok_or_else(|| format!("Unknown processor type '{}'", processor_type))
+}
+
+fn channel_for_connection(
+    content: &str,
+    source_node_id: &str,
+    target_node_id: &str,
+) -> Result<String, String> {
+    if source_node_id == target_node_id {
+        return Err("A node cannot be connected to itself".to_string());
+    }
+
+    if target_node_id.starts_with("input:") {
+        return Err("Input stages cannot consume channels".to_string());
+    }
+
+    let graph = graph_from_content(content, "rewiring")?;
+    let source_node = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == source_node_id)
+        .ok_or_else(|| format!("Source node '{}' not found", source_node_id))?;
+    let target_node = graph
+        .nodes
+        .iter()
+        .find(|node| node.id == target_node_id)
+        .ok_or_else(|| format!("Target node '{}' not found", target_node_id))?;
+    let channel_name = source_node.output_channel.as_ref().ok_or_else(|| {
+        format!(
+            "Source node '{}' does not produce an output channel",
+            source_node.display_name
+        )
+    })?;
+
+    if target_node
+        .input_channels
+        .iter()
+        .any(|input| input == channel_name)
+    {
+        return Err(format!(
+            "Target node '{}' already consumes channel '{}'",
+            target_node.display_name, channel_name
+        ));
+    }
+
+    Ok(channel_name.clone())
 }
 
 fn update_existing_parameter(
@@ -354,6 +571,279 @@ fn remove_input_channel(
 
     *inputs = next_inputs;
     Ok(())
+}
+
+fn add_node_to_document(
+    document: &mut DocumentMut,
+    descriptor: &ProcessorDescriptor,
+    node_name: &str,
+    pipeline_name: Option<&str>,
+) -> Result<(), String> {
+    let stage = new_node_table(descriptor, node_name)?;
+
+    match descriptor.category {
+        ProcessorCategory::Input => {
+            let inputs = ensure_document_table(document, "inputs")?;
+            insert_named_node(inputs, node_name, stage, "input")
+        }
+        ProcessorCategory::Output => {
+            let outputs = ensure_document_table(document, "outputs")?;
+            insert_named_node(outputs, node_name, stage, "output")
+        }
+        ProcessorCategory::Transform | ProcessorCategory::Aggregator => {
+            let pipeline_name = pipeline_name
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .unwrap_or("default_pipeline");
+            validate_node_name(pipeline_name)?;
+
+            let pipelines = ensure_document_table(document, "pipelines")?;
+            let pipeline = ensure_child_table(pipelines, pipeline_name)?;
+            if pipeline.get("description").is_none() {
+                pipeline["description"] = toml_edit::value(format!("{} pipeline", pipeline_name));
+            }
+            let stages = ensure_child_table(pipeline, "stages")?;
+            insert_named_node(stages, node_name, stage, "pipeline stage")
+        }
+    }
+}
+
+fn delete_node_from_document(document: &mut DocumentMut, node_id: &str) -> Result<(), String> {
+    if let Some(name) = node_id.strip_prefix("input:") {
+        return remove_named_node(document, "inputs", name, "input");
+    }
+
+    if let Some(name) = node_id.strip_prefix("output:") {
+        return remove_named_node(document, "outputs", name, "output");
+    }
+
+    if let Some(rest) = node_id.strip_prefix("pipeline:") {
+        let (pipeline_name, stage_name) = rest
+            .split_once(".stage:")
+            .ok_or_else(|| format!("Invalid pipeline node id: {}", node_id))?;
+        let stages = document
+            .get_mut("pipelines")
+            .and_then(|item| item.get_mut(pipeline_name))
+            .and_then(|item| item.get_mut("stages"))
+            .ok_or_else(|| {
+                format!(
+                    "Pipeline stage '{}.{}' not found",
+                    pipeline_name, stage_name
+                )
+            })?;
+
+        return remove_child_from_item(stages, stage_name, "pipeline stage");
+    }
+
+    Err(format!("Unsupported node id: {}", node_id))
+}
+
+fn remove_named_node(
+    document: &mut DocumentMut,
+    table_key: &str,
+    node_name: &str,
+    label: &str,
+) -> Result<(), String> {
+    let parent = document
+        .get_mut(table_key)
+        .ok_or_else(|| format!("{} table does not exist", table_key))?;
+
+    remove_child_from_item(parent, node_name, label)
+}
+
+fn remove_child_from_item(parent: &mut Item, node_name: &str, label: &str) -> Result<(), String> {
+    if let Some(table) = parent.as_table_mut() {
+        table
+            .remove(node_name)
+            .map(|_| ())
+            .ok_or_else(|| format!("A {} named '{}' does not exist", label, node_name))
+    } else {
+        Err(format!("{} parent is not editable as a table", label))
+    }
+}
+
+fn remove_channel_from_all_inputs(
+    document: &mut DocumentMut,
+    channel_name: &str,
+) -> Result<(), String> {
+    if let Some(outputs) = document.get_mut("outputs") {
+        remove_channel_from_stage_table(outputs, channel_name)?;
+    }
+
+    if let Some(pipelines) = document.get_mut("pipelines") {
+        let Some(pipelines_table) = pipelines.as_table_mut() else {
+            return Err("Pipelines are not editable as a table".to_string());
+        };
+
+        for (_, pipeline) in pipelines_table.iter_mut() {
+            if let Some(stages) = pipeline.get_mut("stages") {
+                remove_channel_from_stage_table(stages, channel_name)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn remove_channel_from_stage_table(stages: &mut Item, channel_name: &str) -> Result<(), String> {
+    let Some(stages_table) = stages.as_table_mut() else {
+        return Err("Stages are not editable as a table".to_string());
+    };
+
+    for (_, stage) in stages_table.iter_mut() {
+        remove_input_channel_if_present(stage, channel_name)?;
+    }
+
+    Ok(())
+}
+
+fn remove_input_channel_if_present(stage: &mut Item, channel_name: &str) -> Result<(), String> {
+    let Some(inputs) = stage.get_mut("inputs") else {
+        return Ok(());
+    };
+    let inputs = inputs
+        .as_value_mut()
+        .and_then(Value::as_array_mut)
+        .ok_or_else(|| "Stage inputs are not editable as an array".to_string())?;
+    let mut next_inputs = Array::default();
+
+    for input in inputs.iter() {
+        let Some(input_name) = input.as_str() else {
+            return Err("Stage inputs must be string channel names".to_string());
+        };
+
+        if input_name != channel_name {
+            next_inputs.push(input_name);
+        }
+    }
+
+    *inputs = next_inputs;
+    Ok(())
+}
+
+fn new_node_table(descriptor: &ProcessorDescriptor, node_name: &str) -> Result<Item, String> {
+    let mut table = Table::new();
+    table["type"] = toml_edit::value(descriptor.type_name.as_str());
+
+    if descriptor.category != ProcessorCategory::Input {
+        table["inputs"] = toml_edit::value(Array::default());
+    }
+
+    if descriptor.category != ProcessorCategory::Output {
+        table["output"] = toml_edit::value(default_channel_name(node_name));
+    }
+
+    let mut parameters = toml_edit::InlineTable::new();
+    for field in &descriptor.fields {
+        if let Some(default_value) = default_value_for_field(field)? {
+            parameters.insert(&field.key, default_value);
+        }
+    }
+
+    if !parameters.is_empty() {
+        table["parameters"] = toml_edit::value(parameters);
+    }
+
+    Ok(Item::Table(table))
+}
+
+fn default_value_for_field(field: &FieldSpec) -> Result<Option<Value>, String> {
+    let Some(default_value) = field.default_value.as_deref() else {
+        return Ok(None);
+    };
+
+    let value = match field.kind {
+        FieldKind::String | FieldKind::Enum => Value::from(default_value),
+        FieldKind::Integer => Value::from(
+            default_value
+                .parse::<i64>()
+                .map_err(|_| format!("Default for '{}' is not an integer", field.key))?,
+        ),
+        FieldKind::Number => Value::from(
+            default_value
+                .parse::<f64>()
+                .map_err(|_| format!("Default for '{}' is not a number", field.key))?,
+        ),
+        FieldKind::Boolean => Value::from(
+            default_value
+                .parse::<bool>()
+                .map_err(|_| format!("Default for '{}' is not a boolean", field.key))?,
+        ),
+        FieldKind::Array | FieldKind::Object | FieldKind::JsonValue => {
+            let item = toml_item_from_default_literal(default_value)?;
+            item.into_value()
+                .map_err(|_| format!("Default for '{}' is not an inline TOML value", field.key))?
+        }
+    };
+
+    Ok(Some(value))
+}
+
+fn toml_item_from_default_literal(default_value: &str) -> Result<Item, String> {
+    let snippet = format!("value = {}", default_value);
+    let mut document = snippet
+        .parse::<DocumentMut>()
+        .map_err(|error| format!("Failed to parse descriptor default '{}': {}", default_value, error))?;
+
+    Ok(document.remove("value").unwrap_or(Item::None))
+}
+
+fn ensure_document_table<'a>(
+    document: &'a mut DocumentMut,
+    key: &str,
+) -> Result<&'a mut Item, String> {
+    if document.get(key).is_none() {
+        document[key] = Item::Table(Table::new());
+    }
+
+    document
+        .get_mut(key)
+        .filter(|item| item.as_table().is_some())
+        .ok_or_else(|| format!("'{}' is not editable as a table", key))
+}
+
+fn ensure_child_table<'a>(parent: &'a mut Item, key: &str) -> Result<&'a mut Item, String> {
+    if parent.get(key).is_none() {
+        parent[key] = Item::Table(Table::new());
+    }
+
+    parent
+        .get_mut(key)
+        .filter(|item| item.as_table().is_some())
+        .ok_or_else(|| format!("'{}' is not editable as a table", key))
+}
+
+fn insert_named_node(
+    parent: &mut Item,
+    node_name: &str,
+    stage: Item,
+    label: &str,
+) -> Result<(), String> {
+    if parent.get(node_name).is_some() {
+        return Err(format!("A {} named '{}' already exists", label, node_name));
+    }
+
+    parent[node_name] = stage;
+    Ok(())
+}
+
+fn validate_node_name(name: &str) -> Result<(), String> {
+    if name.is_empty() {
+        return Err("Node name cannot be empty".to_string());
+    }
+
+    if !name
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+    {
+        return Err("Node names may only contain letters, numbers, underscores, and hyphens".to_string());
+    }
+
+    Ok(())
+}
+
+fn default_channel_name(node_name: &str) -> String {
+    format!("{}_data", node_name.replace('-', "_"))
 }
 
 fn inputs_array_mut(stage: &mut Item) -> Result<&mut Array, String> {
@@ -669,13 +1159,24 @@ fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             load_graph,
+            load_config_text,
+            save_config_text,
+            add_node,
+            add_node_draft,
+            delete_node,
+            delete_node_draft,
             connect_nodes,
+            connect_nodes_draft,
             disconnect_edge,
+            disconnect_edge_draft,
             list_example_configs,
             list_processor_descriptors,
             update_node_field,
+            update_node_field_draft,
             update_node_parameter_json,
-            update_node_parameter
+            update_node_parameter_json_draft,
+            update_node_parameter,
+            update_node_parameter_draft
         ])
         .run(tauri::generate_context!())
         .expect("error while running Liminal Pipeline GUI");
@@ -1062,6 +1563,127 @@ inputs = ["raw_data", "filtered_data"]
         let edited = document.to_string();
         assert!(!edited.contains("\"raw_data\""));
         assert!(edited.contains("\"filtered_data\""));
+    }
+
+    #[test]
+    fn adds_input_node_with_output_and_descriptor_defaults() {
+        let mut document = parse_document(
+            r#"
+[outputs.console]
+type = "console"
+"#,
+        );
+        let descriptor = processor_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.type_name == "simulated")
+            .expect("simulated descriptor exists");
+
+        add_node_to_document(&mut document, &descriptor, "new_sensor", None)
+            .expect("input node is added");
+
+        let edited = document.to_string();
+        assert!(edited.contains("[inputs.new_sensor]"));
+        assert!(edited.contains("type = \"simulated\""));
+        assert!(edited.contains("output = \"new_sensor_data\""));
+        assert!(edited.contains("interval_ms = 1000"));
+        assert!(edited.contains("distribution = \"uniform\""));
+        assert!(!edited.contains("inputs = []"));
+    }
+
+    #[test]
+    fn adds_pipeline_stage_to_named_pipeline() {
+        let mut document = parse_document(
+            r#"
+[pipelines.rules]
+description = "Rules"
+"#,
+        );
+        let descriptor = processor_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.type_name == "rule")
+            .expect("rule descriptor exists");
+
+        add_node_to_document(&mut document, &descriptor, "new_filter", Some("rules"))
+            .expect("pipeline stage is added");
+
+        let edited = document.to_string();
+        assert!(edited.contains("[pipelines.rules.stages.new_filter]"));
+        assert!(edited.contains("type = \"rule\""));
+        assert!(edited.contains("inputs = []"));
+        assert!(edited.contains("output = \"new_filter_data\""));
+    }
+
+    #[test]
+    fn rejects_duplicate_added_node() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+"#,
+        );
+        let descriptor = processor_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.type_name == "simulated")
+            .expect("simulated descriptor exists");
+
+        let error = add_node_to_document(&mut document, &descriptor, "sensor", None)
+            .expect_err("duplicate input node is rejected");
+
+        assert!(error.contains("already exists"));
+    }
+
+    #[test]
+    fn deletes_producer_node_and_removes_downstream_inputs() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+
+[pipelines.rules.stages.filter]
+type = "rule"
+inputs = ["raw_data", "other_data"]
+output = "filtered_data"
+
+[outputs.console]
+type = "console"
+inputs = ["raw_data", "filtered_data"]
+"#,
+        );
+
+        delete_node_from_document(&mut document, "input:sensor").expect("input node is deleted");
+        remove_channel_from_all_inputs(&mut document, "raw_data")
+            .expect("downstream inputs are cleaned");
+
+        let edited = document.to_string();
+        assert!(!edited.contains("[inputs.sensor]"));
+        assert!(!edited.contains("\"raw_data\""));
+        assert!(edited.contains("\"other_data\""));
+        assert!(edited.contains("\"filtered_data\""));
+    }
+
+    #[test]
+    fn deletes_output_node_without_touching_producers() {
+        let mut document = parse_document(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+
+[outputs.console]
+type = "console"
+inputs = ["raw_data"]
+"#,
+        );
+
+        delete_node_from_document(&mut document, "output:console")
+            .expect("output node is deleted");
+
+        let edited = document.to_string();
+        assert!(edited.contains("[inputs.sensor]"));
+        assert!(edited.contains("output = \"raw_data\""));
+        assert!(!edited.contains("[outputs.console]"));
     }
 
     #[test]
