@@ -187,6 +187,8 @@ type FlowNodeData = {
   graphNode: GraphNode;
   diagnostics: GraphDiagnostic[];
   channelDiagnosticCounts: Record<string, number>;
+  runtimeActive: boolean;
+  activeChannelNames: string[];
   connectionState: "valid" | "invalid" | null;
   selectedChannelName: string | null;
   onSelectChannel: (channelName: string) => void;
@@ -3420,6 +3422,10 @@ function GraphCanvas({
     graph?.channels.forEach((channel) => map.set(channel.name, channel));
     return map;
   }, [graph]);
+  const runtimeActivity = useMemo(
+    () => runtimeActivityFromLogs(graph, runtimeLogs),
+    [graph, runtimeLogs],
+  );
 
   const flowNodes = useMemo<Node<FlowNodeData>[]>(() => {
     const query = filterText.trim().toLowerCase();
@@ -3460,6 +3466,10 @@ function GraphCanvas({
           graphNode: node,
           diagnostics: diagnosticsByNode.get(node.id) ?? [],
           channelDiagnosticCounts,
+          runtimeActive: runtimeActivity.nodeIds.has(node.id),
+          activeChannelNames: [...node.input_channels, node.output_channel ?? ""].filter((channelName) =>
+            runtimeActivity.channelNames.has(channelName),
+          ),
           connectionState,
           selectedChannelName,
           onSelectChannel,
@@ -3481,6 +3491,7 @@ function GraphCanvas({
     graph,
     connectionSourceNodeId,
     onSelectChannel,
+    runtimeActivity,
     savedLayout,
     selectedChannelName,
     selectedNodeId,
@@ -3521,12 +3532,13 @@ function GraphCanvas({
           onSelectEdge,
           pathState,
           severity: severityForDiagnostics(channelDiagnostics),
+          runtimeActive: runtimeActivity.channelNames.has(edge.channel_name),
         },
         animated: channel?.channel_type === "broadcast" || channel?.channel_type === "fanout",
         style: { stroke: color, strokeWidth: 2.1 },
       };
     });
-  }, [channelByName, focusState, graph, onSelectEdge, selectedEdgeId]);
+  }, [channelByName, focusState, graph, onSelectEdge, runtimeActivity, selectedEdgeId]);
 
   const [nodes, setNodes] = useState<Node<FlowNodeData>[]>(flowNodes);
   const [edges, setEdges] = useState<Edge[]>(flowEdges);
@@ -3710,6 +3722,8 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     graphNode,
     diagnostics,
     channelDiagnosticCounts,
+    runtimeActive,
+    activeChannelNames,
     connectionState,
     selectedChannelName,
     onSelectChannel,
@@ -3723,6 +3737,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     selected ? "selected" : "",
     connectionState === "valid" ? "connection-valid" : "",
     connectionState === "invalid" ? "connection-invalid" : "",
+    runtimeActive ? "runtime-active" : "",
     hasError ? "has-error" : "",
     hasWarning ? "has-warning" : "",
   ]
@@ -3752,7 +3767,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
         {graphNode.input_channels.map((channel, index) => (
           <button
             key={`${channel}-${index}`}
-            className={channelClassName("input-channel", channel, selectedChannelName)}
+            className={channelClassName("input-channel", channel, selectedChannelName, activeChannelNames)}
             title={channel}
             onClick={(event) => {
               event.stopPropagation();
@@ -3774,7 +3789,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
         ))}
         {outputChannel && (
           <button
-            className={channelClassName("output-channel", outputChannel, selectedChannelName)}
+            className={channelClassName("output-channel", outputChannel, selectedChannelName, activeChannelNames)}
             title={outputChannel}
             onClick={(event) => {
               event.stopPropagation();
@@ -3806,6 +3821,7 @@ type ChannelEdgeData = {
   onSelectEdge?: (edgeId: string) => void;
   pathState: "active" | "muted" | null;
   severity: DiagnosticSeverity | null;
+  runtimeActive: boolean;
 };
 
 function ChannelEdge({
@@ -3828,6 +3844,7 @@ function ChannelEdge({
     onSelectEdge: undefined,
     pathState: null,
     severity: null,
+    runtimeActive: false,
   };
   const [basePath, labelX, labelY] = getBezierPath({
     sourceX,
@@ -3855,6 +3872,7 @@ function ChannelEdge({
           edgeData.severity ? edgeData.severity : "",
           edgeData.pathState === "active" ? "focus-active" : "",
           edgeData.pathState === "muted" ? "focus-muted" : "",
+          edgeData.runtimeActive ? "runtime-active" : "",
         ]
           .filter(Boolean)
           .join(" ")}
@@ -3872,6 +3890,7 @@ function ChannelEdge({
             edgeData.severity ? edgeData.severity : "",
             edgeData.pathState === "active" ? "focus-active" : "",
             edgeData.pathState === "muted" ? "focus-muted" : "",
+            edgeData.runtimeActive ? "runtime-active" : "",
           ]
             .filter(Boolean)
             .join(" ")}
@@ -3934,8 +3953,19 @@ function automaticFlowNodes(nextNodes: Node<FlowNodeData>[], graphNodes: GraphNo
   }));
 }
 
-function channelClassName(kindClass: string, channelName: string, selectedChannelName: string | null) {
-  return ["channel", "nodrag", kindClass, channelName === selectedChannelName ? "selected-channel" : ""]
+function channelClassName(
+  kindClass: string,
+  channelName: string,
+  selectedChannelName: string | null,
+  activeChannelNames: string[] = [],
+) {
+  return [
+    "channel",
+    "nodrag",
+    kindClass,
+    channelName === selectedChannelName ? "selected-channel" : "",
+    activeChannelNames.includes(channelName) ? "runtime-active" : "",
+  ]
     .filter(Boolean)
     .join(" ");
 }
@@ -4641,6 +4671,49 @@ function runtimeSelectionTokens(selectedNode: GraphNode | null, selectedChannelN
   }
 
   return [...tokens].filter((token) => token.trim().length > 0);
+}
+
+function runtimeActivityFromLogs(graph: ResolvedPipelineGraph | null, logs: RuntimeLogEntry[]) {
+  const activeNodeIds = new Set<string>();
+  const activeChannelNames = new Set<string>();
+  const recentLogText = logs
+    .slice(-25)
+    .map((entry) => entry.line.toLowerCase())
+    .join("\n");
+
+  if (!graph || recentLogText.length === 0) {
+    return { nodeIds: activeNodeIds, channelNames: activeChannelNames };
+  }
+
+  graph.channels.forEach((channel) => {
+    if (recentLogText.includes(channel.name.toLowerCase())) {
+      activeChannelNames.add(channel.name);
+    }
+  });
+
+  graph.nodes.forEach((node) => {
+    const nodeTokens = runtimeSelectionTokens(node, null);
+    if (nodeTokens.some((token) => recentLogText.includes(token.toLowerCase()))) {
+      activeNodeIds.add(node.id);
+      node.input_channels.forEach((channelName) => {
+        if (recentLogText.includes(channelName.toLowerCase())) {
+          activeChannelNames.add(channelName);
+        }
+      });
+      if (node.output_channel && recentLogText.includes(node.output_channel.toLowerCase())) {
+        activeChannelNames.add(node.output_channel);
+      }
+    }
+  });
+
+  graph.edges.forEach((edge) => {
+    if (activeChannelNames.has(edge.channel_name)) {
+      activeNodeIds.add(edge.source_node_id);
+      activeNodeIds.add(edge.target_node_id);
+    }
+  });
+
+  return { nodeIds: activeNodeIds, channelNames: activeChannelNames };
 }
 
 function isTextEditingTarget(target: EventTarget | null) {
