@@ -3768,8 +3768,13 @@ function GraphCanvas({
         >
           <Background color="#243235" gap={24} size={1} />
           <MiniMap
+            className="liminal-minimap"
             pannable
             zoomable
+            bgColor="rgba(8, 13, 15, 0.94)"
+            maskColor="rgba(103, 229, 216, 0.07)"
+            nodeStrokeColor="#152326"
+            nodeBorderRadius={2}
             nodeColor={(node) => {
               const graphNode = (node.data as FlowNodeData).graphNode;
               if (graphNode.kind === "input") return "#4db7a7";

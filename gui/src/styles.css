@@ -2139,6 +2139,52 @@ button {
   height: 100%;
 }
 
+.react-flow__controls {
+  overflow: hidden;
+  border: 1px solid #22383c;
+  border-radius: 8px;
+  background: rgba(8, 13, 15, 0.94);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+}
+
+.react-flow__controls-button {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-bottom: 1px solid #1d2b2f;
+  color: #bfe9e3;
+  background: #0e1517;
+}
+
+.react-flow__controls-button:last-child {
+  border-bottom: 0;
+}
+
+.react-flow__controls-button:hover {
+  color: #f2fffc;
+  background: #132325;
+}
+
+.react-flow__controls-button svg {
+  max-width: 14px;
+  max-height: 14px;
+  fill: currentColor;
+}
+
+.react-flow__minimap {
+  overflow: hidden;
+  border: 1px solid #22383c;
+  border-radius: 8px;
+  background: rgba(8, 13, 15, 0.94);
+  box-shadow: 0 16px 42px rgba(0, 0, 0, 0.32);
+}
+
+.liminal-minimap .react-flow__minimap-mask {
+  fill: rgba(103, 229, 216, 0.07);
+  stroke: rgba(103, 229, 216, 0.32);
+  stroke-width: 1;
+}
+
 .react-flow__edges {
   z-index: 6;
 }
