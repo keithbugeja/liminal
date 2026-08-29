@@ -382,18 +382,6 @@ create new empty TOML configs, edit processor parameters, add and remove nodes, 
 channels, save or save-as without unnecessary TOML churn, and inspect graph diagnostics
 visually.
 
-### GUI Features
-
-- Graph view for inputs, pipeline stages, outputs, channels, and diagnostics
-- CyberEther-inspired node and edge styling with readable channel labels
-- Format-preserving edits using `toml_edit`
-- Generated node palette and parameter forms from processor descriptors
-- Native file open, folder open, save, save-as, recent files, and workspace browsing
-- Layout persistence per config file
-- Run/stop controls for launching the active saved pipeline
-- In-app runtime console with stdout/stderr streaming and selection-based filtering
-- Lightweight node, channel, and edge activity indicators from recent runtime output
-
 ### Running the GUI
 
 From the repository root:
