@@ -368,3 +368,19 @@ if self.timing.should_drop_message(&message) {
     continue; // Skip processing
 }
 ```
+
+## Citation
+
+If you use this framework in academic work (papers, theses, or technical reports), please cite it using the following reference.
+
+```bibtex
+@software{bugeja_liminal_2026,
+  author       = {Keith Bugeja},
+  title        = {Liminal: A Modular Framework for Real-Time Data Processing Pipelines},
+  year         = {2026},
+  publisher    = {Zenodo},
+  version      = {v0.2.0-alpha},
+  doi          = {10.5281/zenodo.18256609},
+  url          = {https://doi.org/10.5281/zenodo.18256609}
+}
+```
