@@ -1683,6 +1683,7 @@ fn main() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Liminal Pipeline GUI");
+    
 }
 
 #[cfg(test)]
