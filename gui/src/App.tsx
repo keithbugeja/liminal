@@ -214,6 +214,10 @@ type FlowDebugSnapshot = {
   renderedNodes: number;
   appEdges: number;
   renderedEdges: number;
+  domNodes: number;
+  domEdges: number;
+  domMinimapNodes: number;
+  viewportTransform: string;
   viewportX: number;
   viewportY: number;
   zoom: number;
@@ -3532,6 +3536,8 @@ function GraphCanvas({
   const [flowRevision, setFlowRevision] = useState(0);
   const previousConfigPath = useRef(configPath);
   const previousFitKey = useRef<string | null>(null);
+  const flowAreaRef = useRef<HTMLDivElement | null>(null);
+  const missingPaintChecks = useRef(0);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const [nodePositions, setNodePositions] = useState<Record<string, LayoutPosition>>(savedLayout);
@@ -3668,11 +3674,21 @@ function GraphCanvas({
   const flowKey = `${configPath}:${flowRevision}`;
   const updateDebugSnapshot = useCallback(() => {
     const viewport = reactFlow.getViewport();
+    const flowArea = flowAreaRef.current;
+    const viewportElement = flowArea?.querySelector<HTMLElement>(".react-flow__viewport") ?? null;
+    const domNodes = flowArea?.querySelectorAll(".react-flow__node").length ?? 0;
+    const domEdges = flowArea?.querySelectorAll(".react-flow__edge").length ?? 0;
+    const domMinimapNodes = flowArea?.querySelectorAll(".react-flow__minimap-node").length ?? 0;
+
     setDebugSnapshot({
       appNodes: flowNodes.length,
       renderedNodes: reactFlow.getNodes().length,
       appEdges: flowEdges.length,
       renderedEdges: reactFlow.getEdges().length,
+      domNodes,
+      domEdges,
+      domMinimapNodes,
+      viewportTransform: viewportElement?.style.transform || "none",
       viewportX: Math.round(viewport.x),
       viewportY: Math.round(viewport.y),
       zoom: Number(viewport.zoom.toFixed(3)),
@@ -3771,6 +3787,34 @@ function GraphCanvas({
     return () => window.clearInterval(interval);
   }, [updateDebugSnapshot]);
 
+  useEffect(() => {
+    const interval = window.setInterval(() => {
+      const flowArea = flowAreaRef.current;
+      if (!flowArea || flowNodes.length === 0 || reactFlow.getNodes().length === 0) {
+        missingPaintChecks.current = 0;
+        return;
+      }
+
+      const domNodes = flowArea.querySelectorAll(".react-flow__node").length;
+      const domMinimapNodes = flowArea.querySelectorAll(".react-flow__minimap-node").length;
+      const paintLayerMissing = domNodes === 0 || domMinimapNodes === 0;
+
+      if (!paintLayerMissing) {
+        missingPaintChecks.current = 0;
+        return;
+      }
+
+      missingPaintChecks.current += 1;
+      if (missingPaintChecks.current >= 2) {
+        missingPaintChecks.current = 0;
+        setFlowRevision((revision) => revision + 1);
+        previousFitKey.current = null;
+      }
+    }, 750);
+
+    return () => window.clearInterval(interval);
+  }, [flowNodes.length, reactFlow]);
+
   if (loadState === "error") {
     return (
       <div className="center-message error-message">
@@ -3829,7 +3873,7 @@ function GraphCanvas({
         onFilterChange={onRuntimeLogFilterChange}
         onClear={onClearRuntimeLogs}
       />
-      <div className="flow-area">
+      <div className="flow-area" ref={flowAreaRef}>
         <ReactFlow
           key={flowKey}
           nodes={flowNodes}
@@ -3944,12 +3988,28 @@ function FlowDebugOverlay({
           <dd>{snapshot?.renderedEdges ?? "-"}</dd>
         </div>
         <div>
+          <dt>DOM nodes</dt>
+          <dd>{snapshot?.domNodes ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>DOM edges</dt>
+          <dd>{snapshot?.domEdges ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Mini nodes</dt>
+          <dd>{snapshot?.domMinimapNodes ?? "-"}</dd>
+        </div>
+        <div>
           <dt>Viewport</dt>
           <dd>
             {snapshot
               ? `${snapshot.viewportX}, ${snapshot.viewportY} @ ${snapshot.zoom}`
               : "-"}
           </dd>
+        </div>
+        <div>
+          <dt>Transform</dt>
+          <dd title={snapshot?.viewportTransform ?? ""}>{snapshot?.viewportTransform ?? "-"}</dd>
         </div>
         <div>
           <dt>Runtime</dt>
