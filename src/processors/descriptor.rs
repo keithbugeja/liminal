@@ -182,14 +182,20 @@ pub fn processor_descriptors() -> Vec<ProcessorDescriptor> {
                     &[],
                     "Optional broker password.",
                 ),
-                field(
-                    "topics",
-                    "Topics",
-                    FieldKind::Array,
-                    false,
-                    Some("[\"#\"]"),
-                    &[],
-                    "MQTT topic filters to subscribe to.",
+                field_with_schema(
+                    field(
+                        "topics",
+                        "Topics",
+                        FieldKind::Array,
+                        false,
+                        Some("[\"#\"]"),
+                        &[],
+                        "MQTT topic filters to subscribe to.",
+                    ),
+                    SchemaSpec::Array {
+                        item: Box::new(SchemaSpec::JsonValue),
+                    },
+                    Some("string_array"),
                 ),
             ],
         },
@@ -860,5 +866,23 @@ mod tests {
         sorted_names.sort();
 
         assert_eq!(names, sorted_names);
+    }
+
+    #[test]
+    fn mqtt_sub_topics_use_string_array_renderer() {
+        let descriptors = processor_descriptors();
+        let mqtt_sub = descriptors
+            .iter()
+            .find(|descriptor| descriptor.type_name == "mqtt_sub")
+            .expect("mqtt_sub descriptor exists");
+        let topics = mqtt_sub
+            .fields
+            .iter()
+            .find(|field| field.key == "topics")
+            .expect("topics field exists");
+
+        assert_eq!(topics.kind, FieldKind::Array);
+        assert_eq!(topics.renderer.as_deref(), Some("string_array"));
+        assert!(matches!(topics.schema, Some(SchemaSpec::Array { .. })));
     }
 }

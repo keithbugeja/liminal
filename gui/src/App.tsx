@@ -25,9 +25,10 @@ import {
 import {
   AlertCircle,
   AlertTriangle,
+  ArrowDown,
+  ArrowUp,
   Boxes,
   CircleDot,
-  Copy,
   FilePlus,
   FileJson,
   FolderOpen,
@@ -35,6 +36,7 @@ import {
   History,
   Info,
   Loader2,
+  MoreHorizontal,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -280,6 +282,8 @@ const layoutStoragePrefix = "liminal.layout.";
 const recentConfigsStorageKey = "liminal.recentConfigs";
 const workspacePathStorageKey = "liminal.workspacePath";
 const showExamplesStorageKey = "liminal.showExamples";
+const fileSidebarWidthStorageKey = "liminal.fileSidebarWidth";
+const toolsSidebarWidthStorageKey = "liminal.toolsSidebarWidth";
 const fileSidebarCollapsedStorageKey = "liminal.fileSidebarCollapsed";
 const toolsSidebarCollapsedStorageKey = "liminal.toolsSidebarCollapsed";
 const inspectorCollapsedStorageKey = "liminal.inspectorCollapsed";
@@ -299,6 +303,12 @@ const nodeTypes = { liminalNode: LiminalNode };
 const edgeTypes = { channelEdge: ChannelEdge };
 const channelPalette = ["#67e5d8", "#8aa7ff", "#e2b24f", "#f28b82", "#b58cff", "#78d879"];
 const maxRuntimeLogs = 500;
+const defaultFileSidebarWidth = 320;
+const defaultToolsSidebarWidth = 330;
+const minFileSidebarWidth = 260;
+const maxFileSidebarWidth = 520;
+const minToolsSidebarWidth = 280;
+const maxToolsSidebarWidth = 520;
 
 function App() {
   const [configPath, setConfigPath] = useState(initialConfigPath);
@@ -324,6 +334,17 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [savedContent, setSavedContent] = useState<string | null>(null);
   const [draftContent, setDraftContent] = useState<string | null>(null);
+  const [fileSidebarWidthSetting, setFileSidebarWidthSetting] = useState(() =>
+    readStoredSidebarWidth(fileSidebarWidthStorageKey, defaultFileSidebarWidth, minFileSidebarWidth, maxFileSidebarWidth),
+  );
+  const [toolsSidebarWidthSetting, setToolsSidebarWidthSetting] = useState(() =>
+    readStoredSidebarWidth(
+      toolsSidebarWidthStorageKey,
+      defaultToolsSidebarWidth,
+      minToolsSidebarWidth,
+      maxToolsSidebarWidth,
+    ),
+  );
   const [inspectorWidth, setInspectorWidth] = useState(readStoredInspectorWidth);
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null);
   const [pendingDiscardAction, setPendingDiscardAction] = useState<PendingDiscardAction | null>(null);
@@ -490,13 +511,7 @@ function App() {
     });
   }, [configPath, loadGraph, requestDiscardOrRun]);
 
-  const copyIntoWorkspace = useCallback(async () => {
-    if (draftContent === null) {
-      setError("No editable draft is loaded.");
-      setSaveState("error");
-      return;
-    }
-
+  const copyIntoWorkspace = useCallback(async (sourcePath = configPath) => {
     if (!workspacePath) {
       setError("Choose a workspace folder before copying a config into it.");
       setSaveState("error");
@@ -507,16 +522,21 @@ function App() {
     setError(null);
 
     try {
+      const content =
+        normalizeComparablePath(sourcePath) === normalizeComparablePath(configPath) && draftContent !== null
+          ? draftContent
+          : await invoke<string>("load_config_text", { path: sourcePath });
       const copiedPath = await invoke<string>("copy_config_to_workspace", {
         workspacePath,
-        sourcePath: configPath,
-        content: draftContent,
+        sourcePath,
+        content,
       });
       const nextGraph = await invoke<ResolvedPipelineGraph>("load_graph", { path: copiedPath });
       setGraph(nextGraph);
       setConfigPath(copiedPath);
       setLoadedConfigPath(copiedPath);
-      setSavedContent(draftContent);
+      setDraftContent(content);
+      setSavedContent(content);
       setRecentConfigPaths(writeStoredRecentConfig(copiedPath));
       setSelectedNodeId(nextGraph.nodes[0]?.id ?? null);
       setSelectedChannelName(null);
@@ -1098,9 +1118,77 @@ function App() {
     [inspectorWidth],
   );
 
+  const startFileSidebarResize = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+
+      const startX = event.clientX;
+      const startWidth = fileSidebarWidthSetting;
+
+      document.body.classList.add("resizing-sidebar");
+
+      const resize = (moveEvent: MouseEvent) => {
+        setFileSidebarWidthSetting(
+          clampSidebarWidth(
+            startWidth + moveEvent.clientX - startX,
+            minFileSidebarWidth,
+            maxFileSidebarWidth,
+          ),
+        );
+      };
+      const stopResize = () => {
+        document.body.classList.remove("resizing-sidebar");
+        window.removeEventListener("mousemove", resize);
+        window.removeEventListener("mouseup", stopResize);
+      };
+
+      window.addEventListener("mousemove", resize);
+      window.addEventListener("mouseup", stopResize);
+    },
+    [fileSidebarWidthSetting],
+  );
+
+  const startToolsSidebarResize = useCallback(
+    (event: ReactMouseEvent<HTMLDivElement>) => {
+      event.preventDefault();
+
+      const startX = event.clientX;
+      const startWidth = toolsSidebarWidthSetting;
+
+      document.body.classList.add("resizing-sidebar");
+
+      const resize = (moveEvent: MouseEvent) => {
+        setToolsSidebarWidthSetting(
+          clampSidebarWidth(
+            startWidth + moveEvent.clientX - startX,
+            minToolsSidebarWidth,
+            maxToolsSidebarWidth,
+          ),
+        );
+      };
+      const stopResize = () => {
+        document.body.classList.remove("resizing-sidebar");
+        window.removeEventListener("mousemove", resize);
+        window.removeEventListener("mouseup", stopResize);
+      };
+
+      window.addEventListener("mousemove", resize);
+      window.addEventListener("mouseup", stopResize);
+    },
+    [toolsSidebarWidthSetting],
+  );
+
   useEffect(() => {
     window.localStorage.setItem(inspectorWidthStorageKey, String(inspectorWidth));
   }, [inspectorWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(fileSidebarWidthStorageKey, String(fileSidebarWidthSetting));
+  }, [fileSidebarWidthSetting]);
+
+  useEffect(() => {
+    window.localStorage.setItem(toolsSidebarWidthStorageKey, String(toolsSidebarWidthSetting));
+  }, [toolsSidebarWidthSetting]);
 
   useEffect(() => {
     window.localStorage.setItem(showExamplesStorageKey, String(showExamples));
@@ -1127,12 +1215,20 @@ function App() {
     return () => window.removeEventListener("resize", updateViewport);
   }, []);
 
-  const fileSidebarWidth = fileSidebarCollapsed ? 48 : compactDensity ? 280 : 320;
-  const toolsSidebarWidth = toolsSidebarCollapsed ? 48 : compactDensity ? 300 : 330;
+  const fileSidebarWidth = fileSidebarCollapsed ? 48 : fileSidebarWidthSetting;
+  const toolsSidebarWidth = toolsSidebarCollapsed ? 48 : toolsSidebarWidthSetting;
+  const leftResizerWidth = fileSidebarCollapsed ? 0 : 8;
+  const toolsResizerWidth = toolsSidebarCollapsed ? 0 : 8;
   const resizerWidth = inspectorCollapsed ? 0 : 8;
   const maxEffectiveInspectorWidth = Math.max(
     minInspectorWidth,
-    viewportSize.width - fileSidebarWidth - toolsSidebarWidth - resizerWidth - minGraphColumnWidth,
+    viewportSize.width -
+      fileSidebarWidth -
+      leftResizerWidth -
+      toolsSidebarWidth -
+      toolsResizerWidth -
+      resizerWidth -
+      minGraphColumnWidth,
   );
   const effectiveInspectorWidth = inspectorCollapsed
     ? 48
@@ -1145,7 +1241,9 @@ function App() {
         style={{
           gridTemplateColumns: [
             `${fileSidebarWidth}px`,
+            `${leftResizerWidth}px`,
             `${toolsSidebarWidth}px`,
+            `${toolsResizerWidth}px`,
             "minmax(0, 1fr)",
             `${resizerWidth}px`,
             `${effectiveInspectorWidth}px`,
@@ -1201,7 +1299,6 @@ function App() {
                 onNewConfig={newConfigFile}
                 onOpenFile={openConfigFile}
                 onOpenFolder={openWorkspaceFolder}
-                onPathChange={setConfigPath}
                 onReload={reloadConfig}
                 onRevert={revertDraft}
                 onSave={saveDraft}
@@ -1211,6 +1308,14 @@ function App() {
             </>
           )}
         </aside>
+
+        <div
+          className={fileSidebarCollapsed ? "sidebar-resizer collapsed" : "sidebar-resizer"}
+          onMouseDown={startFileSidebarResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize file sidebar"
+        />
 
         <aside className={toolsSidebarCollapsed ? "sidebar tools-sidebar collapsed" : "sidebar tools-sidebar"}>
           {toolsSidebarCollapsed ? (
@@ -1281,6 +1386,14 @@ function App() {
             </>
           )}
         </aside>
+
+        <div
+          className={toolsSidebarCollapsed ? "sidebar-resizer collapsed" : "sidebar-resizer"}
+          onMouseDown={startToolsSidebarResize}
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize tools sidebar"
+        />
 
         <main className="workspace">
           <GraphCanvas
@@ -1480,7 +1593,6 @@ function ConfigBrowserPanel({
   onNewConfig,
   onOpenFile,
   onOpenFolder,
-  onPathChange,
   onReload,
   onRevert,
   onSave,
@@ -1498,162 +1610,178 @@ function ConfigBrowserPanel({
   workspaceConfigs: string[];
   workspacePath: string;
   onClearRecent: () => void;
-  onCopyIntoWorkspace: () => void;
+  onCopyIntoWorkspace: (sourcePath?: string) => void;
   onLoadConfig: (path: string) => void;
   onNewConfig: () => void;
   onOpenFile: () => void;
   onOpenFolder: () => void;
-  onPathChange: (path: string) => void;
   onReload: () => void;
   onRevert: () => void;
   onSave: () => void;
   onSaveAs: () => void;
   onToggleExamples: (show: boolean) => void;
 }) {
-  const canCopyIntoWorkspace =
-    Boolean(workspacePath) &&
-    draftContent !== null &&
-    !pathMatchesAny(configPath, workspaceConfigs);
+  const [filterText, setFilterText] = useState("");
+  const [workspaceOpen, setWorkspaceOpen] = useState(true);
+  const [recentOpen, setRecentOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const filteredWorkspaceConfigs = filterConfigPaths(workspaceConfigs, filterText);
+  const filteredRecentConfigPaths = filterConfigPaths(recentConfigPaths, filterText);
+  const filteredExampleConfigs = filterConfigPaths(exampleConfigs, filterText);
+  const activeFileName = configFileName(configPath);
+  const activeFolderName = configParentName(configPath);
 
   return (
     <div className="config-browser">
-      <div className="config-browser-header">
-        <div>
-          <FileJson size={16} />
-          <span>Config</span>
+      <div className="file-browser-current">
+        <FileJson size={17} />
+        <div className="current-file-label" title={configPath}>
+          <strong>{activeFileName}</strong>
+          <span>{activeFolderName}</span>
         </div>
         <span className={isDirty ? "file-browser-badge dirty" : "file-browser-badge"}>
           {isDirty ? "Unsaved" : "Saved"}
         </span>
+        <button
+          className="file-menu-trigger"
+          onClick={() => setMenuOpen((open) => !open)}
+          aria-label="File actions"
+          title="File actions"
+        >
+          <MoreHorizontal size={18} />
+        </button>
+        {menuOpen && (
+          <div className="file-menu">
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                onReload();
+              }}
+            >
+              {loadState === "loading" ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
+              <span>Reload</span>
+            </button>
+            <button
+              disabled={!isDirty || saveState === "saving"}
+              onClick={() => {
+                setMenuOpen(false);
+                onSave();
+              }}
+            >
+              <Save size={15} />
+              <span>Save</span>
+            </button>
+            <button
+              disabled={!isDirty || saveState === "saving"}
+              onClick={() => {
+                setMenuOpen(false);
+                onRevert();
+              }}
+            >
+              <RotateCcw size={15} />
+              <span>Revert</span>
+            </button>
+            <button
+              disabled={draftContent === null || saveState === "saving"}
+              onClick={() => {
+                setMenuOpen(false);
+                onSaveAs();
+              }}
+            >
+              <Save size={15} />
+              <span>Save As</span>
+            </button>
+            <button
+              onClick={() => {
+                setMenuOpen(false);
+                onOpenFile();
+              }}
+            >
+              <FileJson size={15} />
+              <span>Open File</span>
+            </button>
+          </div>
+        )}
       </div>
 
-      <div className="file-browser-current">
-        <FileJson size={17} />
+      <div className="file-filter-row">
+        <Search size={17} />
         <input
-          value={configPath}
-          onChange={(event) => onPathChange(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") {
-              onReload();
-            }
-          }}
-          aria-label="Config path"
+          value={filterText}
+          onChange={(event) => setFilterText(event.target.value)}
+          placeholder="Filter files"
+          aria-label="Filter files"
         />
-        <button
-          className="icon-button"
-          onClick={onReload}
-          aria-label="Reload graph"
-          title="Reload graph"
-        >
-          {loadState === "loading" ? (
-            <Loader2 className="spin" size={17} />
-          ) : (
-            <RefreshCw size={17} />
-          )}
-        </button>
-        <button
-          className="icon-button"
-          onClick={onSave}
-          disabled={!isDirty || saveState === "saving"}
-          aria-label="Save draft"
-          title="Save draft"
-        >
-          {saveState === "saving" ? <Loader2 className="spin" size={17} /> : <Save size={17} />}
-        </button>
-        <button
-          className="icon-button"
-          onClick={onRevert}
-          disabled={!isDirty || saveState === "saving"}
-          aria-label="Revert draft"
-          title="Revert draft"
-        >
-          <RotateCcw size={17} />
-        </button>
       </div>
-
-      <div className="file-action-row">
-        <button onClick={onNewConfig} title="New empty TOML config" aria-label="New empty TOML config">
-          <FilePlus size={15} />
-          <span>New</span>
-        </button>
-        <button onClick={onSaveAs} disabled={draftContent === null || saveState === "saving"}>
-          <Save size={15} />
-          <span>Save As</span>
-        </button>
-        <button onClick={onOpenFile}>
-          <FileJson size={15} />
-          <span>Open File</span>
-        </button>
-        <button onClick={onOpenFolder}>
-          <FolderOpen size={15} />
-          <span>Open Folder</span>
-        </button>
-      </div>
-
-      {workspacePath && (
-        <button
-          className="copy-workspace-action"
-          onClick={onCopyIntoWorkspace}
-          disabled={!canCopyIntoWorkspace || saveState === "saving"}
-          title={
-            canCopyIntoWorkspace
-              ? "Copy the active config into the selected workspace"
-              : "The active config is already in the workspace"
-          }
-        >
-          <Copy size={14} />
-          <span>Copy Into Workspace</span>
-        </button>
-      )}
 
       <FileBrowserSection
         title="Workspace"
         icon={<FolderOpen size={14} />}
-        meta={workspacePath ? configFileName(workspacePath) : undefined}
+        count={workspaceConfigs.length}
+        collapsed={!workspaceOpen}
+        onToggle={() => setWorkspaceOpen((open) => !open)}
+        meta={workspacePath ? configParentName(workspacePath) || configFileName(workspacePath) : undefined}
         metaTitle={workspacePath}
       >
-        {workspaceConfigs.length === 0 ? (
+        {filteredWorkspaceConfigs.length === 0 ? (
           <p className="empty-state">{workspacePath ? "No TOML files found." : "No folder selected."}</p>
         ) : (
-          <ConfigFileList paths={workspaceConfigs} activePath={configPath} onLoad={onLoadConfig} />
+          <ConfigFileList paths={filteredWorkspaceConfigs} activePath={configPath} onLoad={onLoadConfig} />
         )}
       </FileBrowserSection>
 
       <FileBrowserSection
         title="Recent"
         icon={<History size={14} />}
-        action={recentConfigPaths.length > 0 ? <button onClick={onClearRecent}>Clear List</button> : undefined}
+        count={recentConfigPaths.length}
+        collapsed={!recentOpen}
+        onToggle={() => setRecentOpen((open) => !open)}
+        action={recentConfigPaths.length > 0 && recentOpen ? <button onClick={onClearRecent}>Clear</button> : undefined}
       >
-        {recentConfigPaths.length === 0 ? (
+        {filteredRecentConfigPaths.length === 0 ? (
           <p className="empty-state">No recent configs.</p>
         ) : (
-          <ConfigFileList paths={recentConfigPaths} activePath={configPath} onLoad={onLoadConfig} />
+          <ConfigFileList paths={filteredRecentConfigPaths} activePath={configPath} onLoad={onLoadConfig} />
         )}
       </FileBrowserSection>
 
       <FileBrowserSection
         title="Examples"
         icon={<FileJson size={14} />}
+        count={exampleConfigs.length}
         action={
           <label className="file-toggle-row">
+            <span>Read only</span>
             <input
               type="checkbox"
               checked={showExamples}
               onChange={(event) => onToggleExamples(event.target.checked)}
             />
-            <span>Show</span>
           </label>
         }
       >
         {showExamples && (
           <ConfigFileList
-            paths={exampleConfigs}
+            paths={filteredExampleConfigs}
             activePath={configPath}
-            labelMode="name"
+            readOnly
+            canCopy={Boolean(workspacePath) && saveState !== "saving"}
+            onCopy={onCopyIntoWorkspace}
             onLoad={onLoadConfig}
           />
         )}
       </FileBrowserSection>
+
+      <div className="file-browser-footer">
+        <button onClick={onNewConfig} title="New empty TOML config">
+          <FilePlus size={15} />
+          <span>New file</span>
+        </button>
+        <button onClick={onOpenFolder}>
+          <FolderOpen size={15} />
+          <span>Open folder</span>
+        </button>
+      </div>
     </div>
   );
 }
@@ -1662,27 +1790,38 @@ function FileBrowserSection({
   title,
   icon,
   action,
+  collapsed = false,
+  count,
   meta,
   metaTitle,
+  onToggle,
   children,
 }: {
   title: string;
   icon: ReactNode;
   action?: ReactNode;
+  collapsed?: boolean;
+  count?: number;
   meta?: string;
   metaTitle?: string;
+  onToggle?: () => void;
   children: ReactNode;
 }) {
   return (
     <section className="file-browser-section">
       <div className="file-browser-section-title">
-        <div>
+        <button className="file-browser-section-toggle" onClick={onToggle} disabled={!onToggle}>
+          <span className={collapsed ? "section-caret" : "section-caret open"} />
           {icon}
           <span>{title}</span>
+        </button>
+        <div className="file-browser-section-meta">
+          {action}
+          {meta ? <strong title={metaTitle}>{meta}</strong> : null}
+          {count !== undefined && <em>{count}</em>}
         </div>
-        {action ?? (meta ? <strong title={metaTitle}>{meta}</strong> : null)}
       </div>
-      {children}
+      {!collapsed && children}
     </section>
   );
 }
@@ -1690,25 +1829,42 @@ function FileBrowserSection({
 function ConfigFileList({
   paths,
   activePath,
-  labelMode = "path",
+  canCopy = false,
   onLoad,
+  onCopy,
+  readOnly = false,
 }: {
   paths: string[];
   activePath: string;
-  labelMode?: "path" | "name";
+  canCopy?: boolean;
   onLoad: (path: string) => void;
+  onCopy?: (path: string) => void;
+  readOnly?: boolean;
 }) {
   return (
     <div className="example-list compact">
       {paths.map((path) => (
-        <button
+        <div
           key={path}
-          className={path === activePath ? "example active" : "example"}
-          onClick={() => onLoad(path)}
+          className={[
+            "example",
+            path === activePath ? "active" : "",
+            readOnly ? "read-only" : "",
+          ]
+            .filter(Boolean)
+            .join(" ")}
           title={path}
         >
-          {labelMode === "name" ? configFileName(path) : path}
-        </button>
+          <button className="example-load" onClick={() => onLoad(path)}>
+            <span>{configFileName(path)}</span>
+            <strong>{configParentName(path)}</strong>
+          </button>
+          {canCopy && onCopy && (
+            <button className="example-copy" onClick={() => onCopy(path)}>
+              Copy in
+            </button>
+          )}
+        </div>
       ))}
     </div>
   );
@@ -2314,7 +2470,13 @@ function ParameterRow({
 
   if (!parameter.editable) {
     return (
-      <div className="parameter-row read-only">
+      <div
+        className={
+          fieldSpec?.renderer === "rule_builder"
+            ? "parameter-row read-only rule-parameter-row"
+            : "parameter-row read-only"
+        }
+      >
         <div className="parameter-label">
           <strong title={parameter.key}>{label}</strong>
           <span>{valueKind}</span>
@@ -2329,6 +2491,14 @@ function ParameterRow({
             saveState={saveState}
             onUpdateParameterJson={onUpdateParameterJson}
           />
+        ) : fieldSpec?.renderer === "string_array" ? (
+          <StringArrayParameterEditor
+            nodeId={nodeId}
+            parameterKey={parameter.key}
+            value={parameter.raw_value}
+            saveState={saveState}
+            onUpdateParameterJson={onUpdateParameterJson}
+          />
         ) : fieldSpec?.schema ? (
           <NestedParameterPreview value={parameter.raw_value} schema={fieldSpec.schema} />
         ) : (
@@ -2339,7 +2509,7 @@ function ParameterRow({
   }
 
   return (
-    <div className="parameter-row">
+    <div className={isDirty ? "parameter-row dirty" : "parameter-row"}>
       <div className="parameter-label">
         <strong title={parameter.key}>{label}</strong>
         <span>{valueKind}</span>
@@ -2370,6 +2540,7 @@ function ParameterRow({
         />
       )}
       <button
+        className="parameter-save"
         disabled={!isDirty || saveState === "saving"}
         onClick={() => onUpdateParameter(nodeId, parameter.key, draftValue)}
       >
@@ -2392,7 +2563,7 @@ function MissingParameterRow({
 }) {
   if (field.renderer === "rule_builder" && field.schema) {
     return (
-      <div className="parameter-row read-only missing-parameter">
+      <div className="parameter-row read-only missing-parameter rule-parameter-row">
         <div className="parameter-label">
           <strong title={field.key}>{field.label}</strong>
           <span>{field.kind}</span>
@@ -2403,6 +2574,25 @@ function MissingParameterRow({
           parameterKey={field.key}
           value={[]}
           schema={field.schema}
+          saveState={saveState}
+          onUpdateParameterJson={onUpdateParameterJson}
+        />
+      </div>
+    );
+  }
+
+  if (field.renderer === "string_array") {
+    return (
+      <div className="parameter-row read-only missing-parameter rule-parameter-row">
+        <div className="parameter-label">
+          <strong title={field.key}>{field.label}</strong>
+          <span>{field.kind}</span>
+        </div>
+        {field.help && <p className="parameter-help">{field.help}</p>}
+        <StringArrayParameterEditor
+          nodeId={nodeId}
+          parameterKey={field.key}
+          value={defaultValueForField(field)}
           saveState={saveState}
           onUpdateParameterJson={onUpdateParameterJson}
         />
@@ -2424,11 +2614,92 @@ function MissingParameterRow({
         <strong>{field.default_value ?? "not set"}</strong>
       </div>
       <button
+        className="parameter-placeholder-action"
         disabled={saveState === "saving"}
         onClick={() => onUpdateParameterJson(nodeId, field.key, defaultValue)}
       >
-        Add
+        {field.required ? "Configure" : "Set default"}
       </button>
+    </div>
+  );
+}
+
+function StringArrayParameterEditor({
+  nodeId,
+  parameterKey,
+  value,
+  saveState,
+  onUpdateParameterJson,
+}: {
+  nodeId: string;
+  parameterKey: string;
+  value: JsonValue;
+  saveState: SaveState;
+  onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
+}) {
+  const arrayValue = useMemo(
+    () => (Array.isArray(value) ? value.map((item) => formatJsonValue(item)) : []),
+    [value],
+  );
+  const [draftItems, setDraftItems] = useState<string[]>(arrayValue);
+  const isDirty = JSON.stringify(draftItems) !== JSON.stringify(arrayValue);
+
+  useEffect(() => {
+    setDraftItems(arrayValue);
+  }, [arrayValue]);
+
+  return (
+    <div className="string-array-editor">
+      <div className="string-array-list">
+        {draftItems.length === 0 ? (
+          <p className="empty-state">No values configured.</p>
+        ) : (
+          draftItems.map((item, index) => (
+            <div className="string-array-row" key={index}>
+              <input
+                value={item}
+                aria-label={`${parameterKey} item ${index + 1}`}
+                onChange={(event) =>
+                  setDraftItems((currentItems) =>
+                    currentItems.map((currentItem, currentIndex) =>
+                      currentIndex === index ? event.target.value : currentItem,
+                    ),
+                  )
+                }
+              />
+              <button
+                className="icon-button danger"
+                onClick={() =>
+                  setDraftItems((currentItems) =>
+                    currentItems.filter((_, currentIndex) => currentIndex !== index),
+                  )
+                }
+                aria-label={`Remove ${parameterKey} item ${index + 1}`}
+                title="Remove"
+              >
+                <Trash2 size={13} />
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+      <div className="string-array-actions">
+        <button
+          className="compact-add-button"
+          onClick={() => setDraftItems((currentItems) => [...currentItems, ""])}
+        >
+          Add
+        </button>
+        <button disabled={!isDirty || saveState === "saving"} onClick={() => setDraftItems(arrayValue)}>
+          Revert
+        </button>
+        <button
+          disabled={!isDirty || saveState === "saving"}
+          onClick={() => onUpdateParameterJson(nodeId, parameterKey, draftItems)}
+        >
+          {saveState === "saving" ? "Saving" : "Save"}
+        </button>
+      </div>
     </div>
   );
 }
@@ -2544,14 +2815,26 @@ function RuleCard({
         <span>Rule {index + 1}</span>
         <strong>{ruleSummary(condition, actions.length, elseActions.length)}</strong>
         <div className="rule-button-group">
-          <button disabled={!canMoveUp} onClick={() => onMove(-1)} aria-label={`Move rule ${index + 1} up`}>
-            Up
+          <button
+            className="icon-button"
+            disabled={!canMoveUp}
+            onClick={() => onMove(-1)}
+            aria-label={`Move rule ${index + 1} up`}
+            title="Move up"
+          >
+            <ArrowUp size={13} />
           </button>
-          <button disabled={!canMoveDown} onClick={() => onMove(1)} aria-label={`Move rule ${index + 1} down`}>
-            Down
+          <button
+            className="icon-button"
+            disabled={!canMoveDown}
+            onClick={() => onMove(1)}
+            aria-label={`Move rule ${index + 1} down`}
+            title="Move down"
+          >
+            <ArrowDown size={13} />
           </button>
-          <button onClick={onRemove} aria-label={`Remove rule ${index + 1}`}>
-            Remove
+          <button className="icon-button danger" onClick={onRemove} aria-label={`Remove rule ${index + 1}`} title="Remove">
+            <Trash2 size={13} />
           </button>
         </div>
       </div>
@@ -2618,9 +2901,12 @@ function RuleActionList({
   return (
     <div className="rule-action-section">
       <div className="rule-action-section-header">
-        <span>{title}</span>
-        <strong>{actions.length}</strong>
+        <div className="rule-action-section-heading">
+          <span>{title}</span>
+          <strong>{actions.length}</strong>
+        </div>
         <button
+          className="compact-add-button"
           disabled={!actionSchema}
           onClick={() =>
             actionSchema && onChange([...actions, defaultActionForVariant(actionSchema, actionSchema.variants[0]?.tag_value ?? "")])
@@ -2718,17 +3004,6 @@ function RuleActionCard({
         ) : (
           <strong>{variant?.label ?? labelFromKey(type || "action")}</strong>
         )}
-        <div className="rule-button-group">
-          <button disabled={!canMoveUp} onClick={() => onMove(-1)} aria-label={`Move action ${index + 1} up`}>
-            Up
-          </button>
-          <button disabled={!canMoveDown} onClick={() => onMove(1)} aria-label={`Move action ${index + 1} down`}>
-            Down
-          </button>
-          <button onClick={onRemove} aria-label={`Remove action ${index + 1}`}>
-            Remove
-          </button>
-        </div>
       </div>
       <div className="rule-action-fields">
         {fields.map((field) => (
@@ -2740,6 +3015,29 @@ function RuleActionCard({
             onChange={(nextValue) => onChange({ ...actionObject, [field.key]: nextValue })}
           />
         ))}
+      </div>
+      <div className="rule-button-group rule-row-controls">
+        <button
+          className="icon-button"
+          disabled={!canMoveUp}
+          onClick={() => onMove(-1)}
+          aria-label={`Move action ${index + 1} up`}
+          title="Move up"
+        >
+          <ArrowUp size={13} />
+        </button>
+        <button
+          className="icon-button"
+          disabled={!canMoveDown}
+          onClick={() => onMove(1)}
+          aria-label={`Move action ${index + 1} down`}
+          title="Move down"
+        >
+          <ArrowDown size={13} />
+        </button>
+        <button className="icon-button danger" onClick={onRemove} aria-label={`Remove action ${index + 1}`} title="Remove">
+          <Trash2 size={13} />
+        </button>
       </div>
     </div>
   );
@@ -3013,7 +3311,7 @@ function EditableFieldRow({
   }, [value]);
 
   return (
-    <div className="parameter-row">
+    <div className={isDirty ? "parameter-row dirty" : "parameter-row"}>
       <div className="parameter-label">
         <strong>{label}</strong>
         <span>{valueKind}</span>
@@ -3042,7 +3340,11 @@ function EditableFieldRow({
           onChange={(event) => setDraftValue(event.target.value)}
         />
       )}
-      <button disabled={!isDirty || saveState === "saving"} onClick={() => onSave(draftValue)}>
+      <button
+        className="parameter-save"
+        disabled={!isDirty || saveState === "saving"}
+        onClick={() => onSave(draftValue)}
+      >
         {saveState === "saving" ? "Saving" : "Save"}
       </button>
     </div>
@@ -4813,10 +5115,12 @@ function setObjectValue(
 }
 
 function ruleSummary(condition: { [key: string]: JsonValue }, actionCount: number, elseActionCount: number) {
-  const fieldPath = formatJsonValue(condition.field_path ?? null);
-  const operation = formatJsonValue(condition.operation ?? null);
+  const fieldPath = formatJsonValue(condition.field_path ?? "condition");
+  const operation = formatJsonValue(condition.operation ?? "matches");
+  const actionLabel = actionCount === 1 ? "action" : "actions";
+  const elseActionLabel = elseActionCount === 1 ? "else action" : "else actions";
 
-  return `${fieldPath} ${operation} - ${actionCount}/${elseActionCount}`;
+  return `If ${fieldPath} ${operation}, ${actionCount} ${actionLabel}, ${elseActionCount} ${elseActionLabel}`;
 }
 
 function labelFromKey(key: string) {
@@ -4838,7 +5142,11 @@ function summarizeNestedValue(value: JsonValue, schema: SchemaSpec) {
       const operation = formatJsonValue(condition.operation ?? null);
       const actionCount = Array.isArray(actions) ? actions.length : 0;
       const elseCount = Array.isArray(elseActions) ? elseActions.length : 0;
-      return `${fieldPath} ${operation} - ${actionCount}/${elseCount}`;
+      return ruleSummary(
+        { field_path: fieldPath, operation },
+        actionCount,
+        elseCount,
+      );
     }
   }
 
@@ -5173,13 +5481,26 @@ function configFileName(path: string) {
   return parts[parts.length - 1] || path;
 }
 
-function normalizeComparablePath(path: string) {
-  return path.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
+function configParentName(path: string) {
+  const parts = path.split(/[\\/]/).filter(Boolean);
+  if (parts.length <= 1) {
+    return "";
+  }
+
+  return parts[parts.length - 2];
 }
 
-function pathMatchesAny(path: string, paths: string[]) {
-  const normalizedPath = normalizeComparablePath(path);
-  return paths.some((candidate) => normalizeComparablePath(candidate) === normalizedPath);
+function filterConfigPaths(paths: string[], filterText: string) {
+  const query = filterText.trim().toLowerCase();
+  if (!query) {
+    return paths;
+  }
+
+  return paths.filter((path) => path.toLowerCase().includes(query));
+}
+
+function normalizeComparablePath(path: string) {
+  return path.trim().replace(/\\/g, "/").replace(/\/+/g, "/").toLowerCase();
 }
 
 function runtimeSelectionTokens(selectedNode: GraphNode | null, selectedChannelName: string | null) {
@@ -5366,6 +5687,22 @@ function readStoredInspectorWidth() {
 
 function clampInspectorWidth(width: number) {
   return Math.min(Math.max(Math.round(width), minInspectorWidth), maxInspectorWidth);
+}
+
+function readStoredSidebarWidth(
+  storageKey: string,
+  fallbackWidth: number,
+  minWidth: number,
+  maxWidth: number,
+) {
+  const storedWidth = window.localStorage.getItem(storageKey);
+  const parsedWidth = storedWidth ? Number(storedWidth) : fallbackWidth;
+
+  return clampSidebarWidth(Number.isFinite(parsedWidth) ? parsedWidth : fallbackWidth, minWidth, maxWidth);
+}
+
+function clampSidebarWidth(width: number, minWidth: number, maxWidth: number) {
+  return Math.min(Math.max(Math.round(width), minWidth), maxWidth);
 }
 
 function isCompactDensityViewport() {
