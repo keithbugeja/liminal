@@ -431,7 +431,7 @@ fn rule_fields() -> Vec<FieldSpec> {
                 "Rules",
                 FieldKind::Array,
                 true,
-                None,
+                Some("[{ condition = { field_path = \"value\", operation = \">=\", value = 0 }, actions = [{ type = \"pass_through\" }], else_actions = [] }]"),
                 &[],
                 "Ordered rule list with conditions, actions, and else actions.",
             ),

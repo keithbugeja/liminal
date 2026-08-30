@@ -9,7 +9,7 @@ parameters = { interval_ms = 500, distribution = "uniform", min_value = 0.0, max
 
 [outputs.console]
 type = "console"
-inputs = ["simulated_data"]
+inputs = ["simulated_data", "rule_2_data"]
 
 [outputs.console_2]
 type = "console"
@@ -30,3 +30,9 @@ output = "rule_data"
 [pipelines.default_pipeline.stages.rule.parameters ]
 error_strategy = "continue" 
 rules = [{ actions = [{ field_paths = [], type = "keep_only_fields" }, { field_path = "success", type = "set_field", value = true }], condition = { field_path = "value", operation = ">", value = 50 }, else_actions = [{ type = "drop_message" }] }]
+
+[pipelines.default_pipeline.stages.rule_2]
+type = "rule"
+inputs = ["simulated_data"]
+output = "rule_2_data"
+parameters = { error_strategy = "continue", rules = [{ condition = { field_path = "value", operation = ">=", value = 0 }, actions = [{ type = "pass_through" }], else_actions = [] }] }

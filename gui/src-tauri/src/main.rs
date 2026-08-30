@@ -1689,6 +1689,7 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liminal::processors::factory::create_processor;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -2168,6 +2169,16 @@ description = "Rules"
         assert!(edited.contains("type = \"rule\""));
         assert!(edited.contains("inputs = []"));
         assert!(edited.contains("output = \"new_filter_data\""));
+        assert!(edited.contains("rules = ["));
+
+        let config = toml::from_str::<Config>(&edited).expect("edited config parses");
+        let stage = config
+            .pipelines
+            .get("rules")
+            .and_then(|pipeline| pipeline.stages.get("new_filter"))
+            .expect("new rule stage exists")
+            .clone();
+        create_processor("rule", stage).expect("descriptor-created rule stage can be built");
     }
 
     #[test]
