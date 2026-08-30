@@ -259,6 +259,43 @@ button {
   font-size: 13px;
 }
 
+.app-shell.compact-density .sidebar,
+.app-shell.compact-density .inspector {
+  gap: 12px;
+  padding: 16px;
+}
+
+.app-shell.compact-density .inspector-shell .inspector {
+  padding-top: 56px;
+}
+
+.app-shell.compact-density .brand-mark,
+.app-shell.compact-density .icon-button,
+.app-shell.compact-density .sidebar-toggle {
+  width: 32px;
+  height: 32px;
+}
+
+.app-shell.compact-density .brand-block h1 {
+  font-size: 21px;
+}
+
+.app-shell.compact-density .brand-block p {
+  font-size: 12px;
+}
+
+.app-shell.compact-density .tools-sidebar-section {
+  gap: 8px;
+}
+
+.app-shell.compact-density .tools-sidebar-section + .tools-sidebar-section {
+  padding-top: 9px;
+}
+
+.app-shell.compact-density .panel {
+  padding: 12px;
+}
+
 .config-browser {
   display: flex;
   flex: 1 1 auto;
@@ -2155,6 +2192,29 @@ button {
     0 16px 42px rgba(0, 0, 0, 0.34),
     0 0 0 1px rgba(240, 196, 108, 0.05);
   font-size: 11px;
+}
+
+.flow-debug-overlay.collapsed {
+  display: inline-flex;
+  width: auto;
+  padding: 6px;
+  gap: 6px;
+}
+
+.flow-debug-overlay.collapsed button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #725f25;
+  border-radius: 6px;
+  color: #ffe0a0;
+  background: #17150d;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.flow-debug-overlay.collapsed button:hover {
+  border-color: #f0c46c;
+  color: #fff7df;
 }
 
 .flow-debug-title {

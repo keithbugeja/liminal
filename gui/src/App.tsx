@@ -319,6 +319,7 @@ function App() {
   const [inspectorCollapsed, setInspectorCollapsed] = useState(() =>
     readStoredCollapsedState(inspectorCollapsedStorageKey),
   );
+  const [compactDensity, setCompactDensity] = useState(isCompactDensityViewport);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const isDirty = savedContent !== null && draftContent !== null && savedContent !== draftContent;
 
@@ -1099,14 +1100,20 @@ function App() {
     window.localStorage.setItem(inspectorCollapsedStorageKey, String(inspectorCollapsed));
   }, [inspectorCollapsed]);
 
+  useEffect(() => {
+    const updateDensity = () => setCompactDensity(isCompactDensityViewport());
+    window.addEventListener("resize", updateDensity);
+    return () => window.removeEventListener("resize", updateDensity);
+  }, []);
+
   return (
     <ReactFlowProvider>
       <div
-        className="app-shell"
+        className={compactDensity ? "app-shell compact-density" : "app-shell"}
         style={{
           gridTemplateColumns: [
-            `${fileSidebarCollapsed ? 48 : 320}px`,
-            `${toolsSidebarCollapsed ? 48 : 330}px`,
+            `${fileSidebarCollapsed ? 48 : compactDensity ? 280 : 320}px`,
+            `${toolsSidebarCollapsed ? 48 : compactDensity ? 300 : 330}px`,
             "minmax(0, 1fr)",
             `${inspectorCollapsed ? 0 : 8}px`,
             `${inspectorCollapsed ? 48 : inspectorWidth}px`,
@@ -3534,8 +3541,10 @@ function GraphCanvas({
   const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const [flowRevision, setFlowRevision] = useState(0);
+  const [debugExpanded, setDebugExpanded] = useState(false);
   const previousConfigPath = useRef(configPath);
   const previousFitKey = useRef<string | null>(null);
+  const settledGraphKey = useRef<string | null>(null);
   const flowAreaRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
@@ -3670,6 +3679,9 @@ function GraphCanvas({
       };
     });
   }, [channelByName, focusState, graph, onSelectEdge, runtimeActivity, selectedEdgeId]);
+  const graphSignature = graph
+    ? `${configPath}:${graph.nodes.map((node) => node.id).join("|")}:${graph.edges.map((edge) => edge.id).join("|")}`
+    : `${configPath}:empty`;
   const flowKey = `${configPath}:${flowRevision}`;
   const updateDebugSnapshot = useCallback(() => {
     const viewport = reactFlow.getViewport();
@@ -3757,6 +3769,24 @@ function GraphCanvas({
     previousFitKey.current = null;
     setFlowRevision((revision) => revision + 1);
   }, [graph]);
+
+  useEffect(() => {
+    if (!graph || flowNodes.length === 0 || settledGraphKey.current === graphSignature) {
+      return;
+    }
+
+    settledGraphKey.current = graphSignature;
+    const settleTimer = window.setTimeout(() => {
+      setFlowRevision((revision) => revision + 1);
+      previousFitKey.current = null;
+      window.setTimeout(() => {
+        reactFlow.fitView({ padding: 0.18, duration: 180 });
+        window.setTimeout(updateDebugSnapshot, 220);
+      }, 80);
+    }, 650);
+
+    return () => window.clearTimeout(settleTimer);
+  }, [flowNodes.length, graph, graphSignature, reactFlow, updateDebugSnapshot]);
 
   useEffect(() => {
     if (!graph || flowNodes.length === 0) {
@@ -3916,6 +3946,8 @@ function GraphCanvas({
         configPath={configPath}
         flowKey={flowKey}
         runtimeState={runtimeState}
+        expanded={debugExpanded}
+        onToggleExpanded={() => setDebugExpanded((expanded) => !expanded)}
         onRecover={recoverFlowView}
       />
     </div>
@@ -3927,17 +3959,31 @@ function FlowDebugOverlay({
   configPath,
   flowKey,
   runtimeState,
+  expanded,
+  onToggleExpanded,
   onRecover,
 }: {
   snapshot: FlowDebugSnapshot | null;
   configPath: string;
   flowKey: string;
   runtimeState: RuntimeState;
+  expanded: boolean;
+  onToggleExpanded: () => void;
   onRecover: () => void;
 }) {
+  if (!expanded) {
+    return (
+      <aside className="flow-debug-overlay collapsed">
+        <button onClick={onToggleExpanded}>Debug</button>
+        <button onClick={onRecover}>Recover</button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="flow-debug-overlay">
       <div className="flow-debug-title">
+        <button onClick={onToggleExpanded}>Hide</button>
         <span>Flow Debug</span>
         <button onClick={onRecover}>Recover</button>
       </div>
@@ -5096,6 +5142,11 @@ function readStoredInspectorWidth() {
 
 function clampInspectorWidth(width: number) {
   return Math.min(Math.max(Math.round(width), minInspectorWidth), maxInspectorWidth);
+}
+
+function isCompactDensityViewport() {
+  const isApplePlatform = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform);
+  return isApplePlatform || window.innerHeight <= 920;
 }
 
 function readStoredRecentConfigs() {
