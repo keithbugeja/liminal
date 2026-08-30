@@ -21,6 +21,7 @@ import {
   Position,
   ReactFlow,
   ReactFlowProvider,
+  useReactFlow,
 } from "@xyflow/react";
 import {
   AlertCircle,
@@ -3521,6 +3522,8 @@ function GraphCanvas({
   const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
   const [layoutRevision, setLayoutRevision] = useState(0);
   const previousConfigPath = useRef(configPath);
+  const previousFitKey = useRef<string | null>(null);
+  const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
   const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
@@ -3692,6 +3695,10 @@ function GraphCanvas({
   );
 
   useEffect(() => {
+    if (!graph || flowNodes.length === 0) {
+      return;
+    }
+
     setNodes((currentNodes) => {
       if (previousConfigPath.current !== configPath) {
         previousConfigPath.current = configPath;
@@ -3700,11 +3707,27 @@ function GraphCanvas({
 
       return mergeFlowNodeMetadata(currentNodes, flowNodes);
     });
-  }, [configPath, flowNodes, setNodes]);
+  }, [configPath, flowNodes, graph, setNodes]);
 
   useEffect(() => {
     setEdges(flowEdges);
   }, [flowEdges, setEdges]);
+
+  useEffect(() => {
+    if (!graph || flowNodes.length === 0) {
+      return;
+    }
+
+    const fitKey = `${configPath}:${graph.nodes.map((node) => node.id).join("|")}`;
+    if (previousFitKey.current === fitKey) {
+      return;
+    }
+
+    previousFitKey.current = fitKey;
+    window.requestAnimationFrame(() => {
+      reactFlow.fitView({ padding: 0.18, duration: 180 });
+    });
+  }, [configPath, flowNodes.length, graph, reactFlow]);
 
   useEffect(() => {
     if (graph) {
@@ -3807,8 +3830,6 @@ function GraphCanvas({
           nodesDraggable
           nodesConnectable
           elementsSelectable
-          fitView
-          fitViewOptions={{ padding: 0.18 }}
         >
           <Background color="#243235" gap={24} size={1} />
           <MiniMap
