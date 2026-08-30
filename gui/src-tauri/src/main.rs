@@ -18,6 +18,11 @@ struct PipelineRuntime {
     process_id: Arc<StdMutex<Option<u32>>>,
 }
 
+struct RuntimeCommand {
+    command: Command,
+    launcher: String,
+}
+
 #[derive(Serialize)]
 struct DraftEditResult {
     graph: ResolvedPipelineGraph,
@@ -114,7 +119,20 @@ fn start_pipeline(
         }
     }
 
-    let mut command = pipeline_command(&resolved_path);
+    let RuntimeCommand {
+        mut command,
+        launcher,
+    } = pipeline_command(&resolved_path);
+    emit_pipeline_log(
+        &window,
+        "system",
+        format!(
+            "Runtime launcher: {}; config: {}",
+            launcher,
+            resolved_path.display()
+        ),
+    );
+
     let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -735,11 +753,18 @@ fn writable_directory_path(path: &str) -> Result<PathBuf, String> {
     Ok(resolved_path)
 }
 
-fn pipeline_command(config_path: &Path) -> Command {
-    let mut command = if let Ok(binary_path) = std::env::var("LIMINAL_BIN") {
-        Command::new(binary_path)
+fn pipeline_command(config_path: &Path) -> RuntimeCommand {
+    let (mut command, launcher) = if let Ok(binary_path) = std::env::var("LIMINAL_BIN") {
+        let command = Command::new(&binary_path);
+        (command, format!("LIMINAL_BIN ({binary_path})"))
     } else if should_launch_runtime_with_cargo() {
-        cargo_runtime_command()
+        (
+            cargo_runtime_command(),
+            format!(
+                "cargo run ({})",
+                repo_root().join("target").join("gui-runtime").display()
+            ),
+        )
     } else {
         let candidate = repo_root()
             .join("target")
@@ -747,7 +772,8 @@ fn pipeline_command(config_path: &Path) -> Command {
             .join(format!("liminal{}", std::env::consts::EXE_SUFFIX));
 
         if candidate.exists() {
-            Command::new(candidate)
+            let command = Command::new(&candidate);
+            (command, format!("debug binary ({})", candidate.display()))
         } else {
             let mut cargo = Command::new("cargo");
             cargo
@@ -756,13 +782,13 @@ fn pipeline_command(config_path: &Path) -> Command {
                 .arg("--manifest-path")
                 .arg(repo_root().join("Cargo.toml"))
                 .arg("--");
-            cargo
+            (cargo, "cargo fallback".to_string())
         }
     };
 
     command.arg("--config").arg(config_path);
     command.current_dir(repo_root());
-    command
+    RuntimeCommand { command, launcher }
 }
 
 fn should_launch_runtime_with_cargo() -> bool {
@@ -808,6 +834,16 @@ where
             );
         }
     });
+}
+
+fn emit_pipeline_log(window: &tauri::Window, stream: &str, line: String) {
+    let _ = window.emit(
+        "pipeline://log",
+        PipelineLogEvent {
+            stream: stream.to_string(),
+            line,
+        },
+    );
 }
 
 fn emit_pipeline_state(window: &tauri::Window, state: &str, message: Option<String>) {
