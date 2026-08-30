@@ -82,6 +82,12 @@ type RuntimeLogEntry = {
   line: string;
 };
 
+type AnsiTextState = {
+  color: string | null;
+  bold: boolean;
+  dim: boolean;
+};
+
 type PipelineLogEvent = {
   stream: RuntimeLogStream;
   line: string;
@@ -3811,14 +3817,122 @@ function RuntimeConsole({
         ) : (
           filteredLogs.map((entry) => (
             <div className={`runtime-log-line ${entry.stream}`} key={entry.id}>
-              <span>{entry.stream}</span>
-              <code>{entry.line}</code>
+              <span className="runtime-log-stream">{entry.stream}</span>
+              <code>{renderAnsiText(entry.line)}</code>
             </div>
           ))
         )}
       </div>
     </section>
   );
+}
+
+function renderAnsiText(text: string): ReactNode[] {
+  const ansiPattern = /\x1b\[([0-9;]*)m/g;
+  const chunks: ReactNode[] = [];
+  let cursor = 0;
+  let state: AnsiTextState = { color: null, bold: false, dim: false };
+  let match: RegExpExecArray | null;
+
+  while ((match = ansiPattern.exec(text)) !== null) {
+    if (match.index > cursor) {
+      chunks.push(renderAnsiChunk(text.slice(cursor, match.index), state, chunks.length));
+    }
+
+    state = applyAnsiCodes(state, match[1]);
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    chunks.push(renderAnsiChunk(text.slice(cursor), state, chunks.length));
+  }
+
+  return chunks;
+}
+
+function renderAnsiChunk(text: string, state: AnsiTextState, key: number) {
+  if (!text) {
+    return null;
+  }
+
+  const classes = [
+    "ansi-text",
+    state.color ? `ansi-${state.color}` : "",
+    state.bold ? "ansi-bold" : "",
+    state.dim ? "ansi-dim" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return (
+    <span className={classes || undefined} key={key}>
+      {text}
+    </span>
+  );
+}
+
+function applyAnsiCodes(state: AnsiTextState, rawCodes: string): AnsiTextState {
+  const codes = rawCodes.length === 0 ? [0] : rawCodes.split(";").map((code) => Number(code));
+  let next = { ...state };
+
+  for (const code of codes) {
+    switch (code) {
+      case 0:
+        next = { color: null, bold: false, dim: false };
+        break;
+      case 1:
+        next.bold = true;
+        next.dim = false;
+        break;
+      case 2:
+        next.dim = true;
+        next.bold = false;
+        break;
+      case 22:
+        next.bold = false;
+        next.dim = false;
+        break;
+      case 30:
+      case 90:
+        next.color = "black";
+        break;
+      case 31:
+      case 91:
+        next.color = "red";
+        break;
+      case 32:
+      case 92:
+        next.color = "green";
+        break;
+      case 33:
+      case 93:
+        next.color = "yellow";
+        break;
+      case 34:
+      case 94:
+        next.color = "blue";
+        break;
+      case 35:
+      case 95:
+        next.color = "magenta";
+        break;
+      case 36:
+      case 96:
+        next.color = "cyan";
+        break;
+      case 37:
+      case 97:
+        next.color = "white";
+        break;
+      case 39:
+        next.color = null;
+        break;
+      default:
+        break;
+    }
+  }
+
+  return next;
 }
 
 function GraphCanvas({

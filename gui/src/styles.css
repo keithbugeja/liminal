@@ -2527,16 +2527,16 @@ button {
   line-height: 1.35;
 }
 
-.runtime-log-line span {
+.runtime-log-stream {
   color: #708782;
   text-transform: uppercase;
 }
 
-.runtime-log-line.stderr span {
+.runtime-log-line.stderr .runtime-log-stream {
   color: #f0c46c;
 }
 
-.runtime-log-line.system span {
+.runtime-log-line.system .runtime-log-stream {
   color: #7beade;
 }
 
@@ -2545,6 +2545,50 @@ button {
   overflow-wrap: anywhere;
   color: inherit;
   font-family: inherit;
+}
+
+.ansi-text {
+  color: inherit;
+}
+
+.ansi-bold {
+  font-weight: 800;
+}
+
+.ansi-dim {
+  color: #7d908c;
+}
+
+.ansi-black {
+  color: #596966;
+}
+
+.ansi-red {
+  color: #ff8b83;
+}
+
+.ansi-green {
+  color: #8de886;
+}
+
+.ansi-yellow {
+  color: #f0c46c;
+}
+
+.ansi-blue {
+  color: #8aa7ff;
+}
+
+.ansi-magenta {
+  color: #d4a2ff;
+}
+
+.ansi-cyan {
+  color: #7beade;
+}
+
+.ansi-white {
+  color: #f4fffc;
 }
 
 .runtime-empty {
