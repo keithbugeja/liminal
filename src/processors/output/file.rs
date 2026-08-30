@@ -137,6 +137,7 @@ pub struct FileOutputProcessor {
     name: String,
     config: FileOutputConfig,
     writer: Option<BufWriter<File>>,
+    #[allow(dead_code)]
     csv_headers_written: bool,
 }
 

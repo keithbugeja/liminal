@@ -218,7 +218,7 @@ pub fn processor_descriptors() -> Vec<ProcessorDescriptor> {
             category: ProcessorCategory::Aggregator,
             display_name: "Fusion".to_string(),
             description: "Combines messages from multiple inputs.".to_string(),
-            fields: vec![],
+            fields: fusion_fields(),
         },
         ProcessorDescriptor {
             type_name: "console".to_string(),
@@ -431,7 +431,9 @@ fn rule_fields() -> Vec<FieldSpec> {
                 "Rules",
                 FieldKind::Array,
                 true,
-                Some("[{ condition = { field_path = \"value\", operation = \">=\", value = 0 }, actions = [{ type = \"pass_through\" }], else_actions = [] }]"),
+                Some(
+                    "[{ condition = { field_path = \"value\", operation = \">=\", value = 0 }, actions = [{ type = \"pass_through\" }], else_actions = [] }]",
+                ),
                 &[],
                 "Ordered rule list with conditions, actions, and else actions.",
             ),
@@ -448,6 +450,38 @@ fn rule_fields() -> Vec<FieldSpec> {
             Some("continue"),
             &["continue", "skip", "abort", "use_default"],
             "Behavior when a rule action fails.",
+        ),
+    ]
+}
+
+fn fusion_fields() -> Vec<FieldSpec> {
+    vec![
+        field(
+            "mode",
+            "Mode",
+            FieldKind::Enum,
+            false,
+            Some("merge_objects"),
+            &["merge_objects", "nest_by_input", "latest_by_input"],
+            "How incoming payloads are combined.",
+        ),
+        field(
+            "conflict_strategy",
+            "Conflict strategy",
+            FieldKind::Enum,
+            false,
+            Some("prefix"),
+            &["prefix", "overwrite"],
+            "How duplicate field names are handled when merging objects.",
+        ),
+        field(
+            "join_window_ms",
+            "Join window",
+            FieldKind::Integer,
+            false,
+            Some("25"),
+            &[],
+            "Milliseconds to wait for other ready inputs before emitting a fused message.",
         ),
     ]
 }
@@ -884,5 +918,36 @@ mod tests {
         assert_eq!(topics.kind, FieldKind::Array);
         assert_eq!(topics.renderer.as_deref(), Some("string_array"));
         assert!(matches!(topics.schema, Some(SchemaSpec::Array { .. })));
+    }
+
+    #[test]
+    fn fusion_descriptor_exposes_aggregator_defaults() {
+        let descriptors = processor_descriptors();
+        let fusion = descriptors
+            .iter()
+            .find(|descriptor| descriptor.type_name == "fusion")
+            .expect("fusion descriptor exists");
+
+        let field_names = fusion
+            .fields
+            .iter()
+            .map(|field| field.key.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(fusion.category, ProcessorCategory::Aggregator);
+        assert_eq!(
+            field_names,
+            vec!["mode", "conflict_strategy", "join_window_ms"]
+        );
+        assert_eq!(
+            fusion.fields[0].default_value.as_deref(),
+            Some("merge_objects")
+        );
+        assert_eq!(
+            fusion.fields[0].options,
+            vec!["merge_objects", "nest_by_input", "latest_by_input"]
+        );
+        assert_eq!(fusion.fields[1].default_value.as_deref(), Some("prefix"));
+        assert_eq!(fusion.fields[2].default_value.as_deref(), Some("25"));
     }
 }

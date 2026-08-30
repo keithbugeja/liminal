@@ -6,6 +6,7 @@ use super::message::Message;
 use crate::config::StageConfig;
 use crate::processors::processor::Processor;
 
+use anyhow::{Context, Result};
 use std::sync::Arc;
 
 /// Creates a new stage with the given name and configuration.
@@ -15,18 +16,22 @@ use std::sync::Arc;
 /// * `config` - The configuration for the stage.
 ///
 /// # Returns
-/// An `Option` containing a `Box<Stage>` if the stage was created successfully, or `None` if the processor was not found.
+/// A `Box<Stage>` if the stage and its processor were created successfully.
 ///
-pub fn create_stage(name: &str, config: StageConfig) -> Option<Box<Stage>> {
+pub fn create_stage(name: &str, config: StageConfig) -> Result<Box<Stage>> {
     // Uncomment if the stage name is used as processor type
     // if let Ok(processor) = crate::processors::create_processor(name, config) {
 
-    if let Ok(processor) = crate::processors::create_processor(&config.r#type.clone(), config) {
-        Some(Box::new(Stage::new(name.to_string(), processor, None)))
-    } else {
-        tracing::error!("Stage processor '{}' not found", name);
-        None
-    }
+    let processor_type = config.r#type.clone();
+    let processor =
+        crate::processors::create_processor(&processor_type, config).with_context(|| {
+            format!(
+                "failed to create processor '{}' for stage '{}'",
+                processor_type, name
+            )
+        })?;
+
+    Ok(Box::new(Stage::new(name.to_string(), processor, None)))
 }
 
 #[derive(Debug, Clone)]

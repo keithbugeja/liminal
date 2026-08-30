@@ -52,7 +52,17 @@ import {
   Terminal,
   Trash2,
 } from "lucide-react";
-import { MouseEvent as ReactMouseEvent, ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 
 type GraphNodeKind = "input" | "pipeline_stage" | "output";
 type GraphLane = "inputs" | "pipeline_stages" | "outputs";
@@ -3759,6 +3769,8 @@ function RuntimeConsole({
   onClear: () => void;
 }) {
   const logListRef = useRef<HTMLDivElement | null>(null);
+  const autoScrollingRef = useRef(false);
+  const userScrollIntentRef = useRef(false);
   const [followLogs, setFollowLogs] = useState(true);
   const selectionTokens = runtimeSelectionTokens(selectedNode, selectedChannelName);
   const filteredLogs =
@@ -3779,7 +3791,7 @@ function RuntimeConsole({
             : "Idle";
   const selectionLabel = selectedChannelName ?? selectedNode?.display_name ?? "No selection";
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!followLogs) {
       return;
     }
@@ -3789,12 +3801,34 @@ function RuntimeConsole({
       return;
     }
 
-    logList.scrollTop = logList.scrollHeight;
+    autoScrollingRef.current = true;
+    requestAnimationFrame(() => {
+      logList.scrollTop = logList.scrollHeight;
+      requestAnimationFrame(() => {
+        autoScrollingRef.current = false;
+      });
+    });
   }, [filteredLogs.length, filter, followLogs]);
+
+  const markUserScrollIntent = useCallback(() => {
+    userScrollIntentRef.current = true;
+  }, []);
+
+  const handleLogKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (
+        followLogs &&
+        ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
+      ) {
+        markUserScrollIntent();
+      }
+    },
+    [followLogs, markUserScrollIntent],
+  );
 
   const handleLogScroll = useCallback(() => {
     const logList = logListRef.current;
-    if (!logList || !followLogs) {
+    if (!logList || !followLogs || autoScrollingRef.current || !userScrollIntentRef.current) {
       return;
     }
 
@@ -3802,14 +3836,20 @@ function RuntimeConsole({
     if (distanceFromBottom > 16) {
       setFollowLogs(false);
     }
+    userScrollIntentRef.current = false;
   }, [followLogs]);
 
   const resumeFollowingLogs = useCallback(() => {
     setFollowLogs(true);
+    userScrollIntentRef.current = false;
     requestAnimationFrame(() => {
       const logList = logListRef.current;
       if (logList) {
+        autoScrollingRef.current = true;
         logList.scrollTop = logList.scrollHeight;
+        requestAnimationFrame(() => {
+          autoScrollingRef.current = false;
+        });
       }
     });
   }, []);
@@ -3852,7 +3892,16 @@ function RuntimeConsole({
           </button>
         </div>
       </div>
-      <div className="runtime-log-list" ref={logListRef} onScroll={handleLogScroll}>
+      <div
+        className="runtime-log-list"
+        ref={logListRef}
+        onKeyDown={handleLogKeyDown}
+        onPointerDown={markUserScrollIntent}
+        onScroll={handleLogScroll}
+        onTouchStart={markUserScrollIntent}
+        onWheel={markUserScrollIntent}
+        tabIndex={0}
+      >
         {filteredLogs.length === 0 ? (
           <p className="runtime-empty">
             {filter === "selection" && selectionTokens.length > 0

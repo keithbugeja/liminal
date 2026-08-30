@@ -1,0 +1,30 @@
+[inputs]
+
+[inputs.simulated]
+type = "simulated"
+output = "hf"
+parameters = { interval_ms = 10, distribution = "uniform", min_value = 100.0, max_value = 200.0 }
+
+[inputs.simulated_2]
+type = "simulated"
+output = "lf"
+parameters = { interval_ms = 1000, distribution = "uniform", min_value = 0.0, max_value = 100.0 }
+
+[pipelines]
+
+[pipelines.default_pipeline]
+description = "default_pipeline pipeline"
+
+[pipelines.default_pipeline.stages]
+
+[pipelines.default_pipeline.stages.fusion]
+type = "fusion"
+inputs = ["hf", "lf"]
+output = "fusion_data"
+parameters = { mode = "latest_by_input", conflict_strategy = "prefix", join_window_ms = 25 }
+
+[outputs]
+
+[outputs.console]
+type = "console"
+inputs = ["fusion_data"]

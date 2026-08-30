@@ -50,9 +50,13 @@ where
                 Ok(msg) => Some(msg),
                 _ => None,
             },
-            Subscriber::Broadcast(rx) => match rx.try_recv() {
-                Ok(msg) => Some(msg),
-                _ => None,
+            Subscriber::Broadcast(rx) => loop {
+                match rx.try_recv() {
+                    Ok(msg) => return Some(msg),
+                    Err(broadcast::error::TryRecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::TryRecvError::Empty)
+                    | Err(broadcast::error::TryRecvError::Closed) => return None,
+                }
             },
             Subscriber::Flume(rx) => match rx.try_recv() {
                 Ok(msg) => Some(msg),

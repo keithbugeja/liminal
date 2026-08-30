@@ -1,4 +1,4 @@
-use crate::config::{ProcessorConfig, StageConfig, extract_param};
+use crate::config::{ProcessorConfig, StageConfig};
 use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
 use crate::core::{context::ProcessingContext, message::Message};
 use crate::processors::common::condition_utils::{ConditionEvaluator, ConditionOperation};
@@ -36,16 +36,28 @@ fn default_error_strategy() -> ErrorStrategy {
 
 impl ProcessorConfig for RuleConfig {
     fn from_stage_config(config: &StageConfig) -> Result<Self> {
-        let rules = extract_param::<Vec<Rule>>(&config.parameters, "rules", vec![]);
+        let rules = match config
+            .parameters
+            .as_ref()
+            .and_then(|parameters| parameters.get("rules"))
+        {
+            Some(value) => serde_json::from_value::<Vec<Rule>>(value.clone())
+                .map_err(|error| anyhow!("invalid rules parameter: {}", error))?,
+            None => vec![],
+        };
         if rules.is_empty() {
             return Err(anyhow!("rule_transformer requires at least one rule"));
         }
 
-        let error_strategy = extract_param::<ErrorStrategy>(
-            &config.parameters,
-            "error_strategy",
-            default_error_strategy(),
-        );
+        let error_strategy = match config
+            .parameters
+            .as_ref()
+            .and_then(|parameters| parameters.get("error_strategy"))
+        {
+            Some(value) => serde_json::from_value::<ErrorStrategy>(value.clone())
+                .map_err(|error| anyhow!("invalid error_strategy parameter: {}", error))?,
+            None => default_error_strategy(),
+        };
 
         // Extract timing configuration
         let timing_config = config.timing.clone();
@@ -220,6 +232,7 @@ pub enum Action {
     KeepOnlyFields { field_paths: Vec<String> },
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 enum ActionPriority {
     PreCompute = 1, // ComputeField (pre-computation phase)

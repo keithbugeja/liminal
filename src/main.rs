@@ -94,17 +94,31 @@ async fn main() {
 
     // Initialize the pipeline manager
     tracing::info!("Initialising pipeline manager...");
-    let _ = core::pipeline::PipelineManager::new(config)
-        .build_all()
-        .expect("pipeline building")
-        .connect_stages()
-        .await
-        .expect("pipeline connection")
-        .start_all()
-        .await
-        .expect("pipeline started")
-        .wait_for_all()
-        .await;
+    let pipeline_manager = match core::pipeline::PipelineManager::new(config).build_all() {
+        Ok(manager) => manager,
+        Err(error) => {
+            tracing::error!("Pipeline build failed: {}", error);
+            std::process::exit(1);
+        }
+    };
+
+    let pipeline_manager = match pipeline_manager.connect_stages().await {
+        Ok(manager) => manager,
+        Err(error) => {
+            tracing::error!("Pipeline connection failed: {}", error);
+            std::process::exit(1);
+        }
+    };
+
+    let pipeline_manager = match pipeline_manager.start_all().await {
+        Ok(manager) => manager,
+        Err(error) => {
+            tracing::error!("Pipeline start failed: {}", error);
+            std::process::exit(1);
+        }
+    };
+
+    let _ = pipeline_manager.wait_for_all().await;
 
     // Pipeline terminated
     tracing::info!("All input sources have been processed.");

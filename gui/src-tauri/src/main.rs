@@ -1,4 +1,5 @@
 use liminal::config::{load_config, Config, ResolvedPipelineGraph};
+use liminal::processors::create_processor;
 use liminal::processors::descriptor::{
     processor_descriptors, FieldKind, FieldSpec, ProcessorCategory, ProcessorDescriptor,
 };
@@ -101,6 +102,7 @@ fn start_pipeline(
         .map_err(|error| format!("Failed to load '{}': {}", resolved_path.display(), error))?;
     liminal::config::validate_config(&config)
         .map_err(|error| format!("Configuration error: {}", error))?;
+    preflight_processors(&config)?;
 
     {
         let running_process = runtime
@@ -156,6 +158,39 @@ fn start_pipeline(
         };
         emit_pipeline_state(&window, "stopped", message);
     });
+
+    Ok(())
+}
+
+fn preflight_processors(config: &Config) -> Result<(), String> {
+    for (name, stage) in &config.inputs {
+        create_processor(&stage.r#type, stage.clone()).map_err(|error| {
+            format!(
+                "Runtime preflight failed for input '{}': processor '{}' could not be created: {}",
+                name, stage.r#type, error
+            )
+        })?;
+    }
+
+    for (pipeline_name, pipeline) in &config.pipelines {
+        for (stage_name, stage) in &pipeline.stages {
+            create_processor(&stage.r#type, stage.clone()).map_err(|error| {
+                format!(
+                    "Runtime preflight failed for stage '{}.{}': processor '{}' could not be created: {}",
+                    pipeline_name, stage_name, stage.r#type, error
+                )
+            })?;
+        }
+    }
+
+    for (name, stage) in &config.outputs {
+        create_processor(&stage.r#type, stage.clone()).map_err(|error| {
+            format!(
+                "Runtime preflight failed for output '{}': processor '{}' could not be created: {}",
+                name, stage.r#type, error
+            )
+        })?;
+    }
 
     Ok(())
 }
@@ -703,6 +738,8 @@ fn writable_directory_path(path: &str) -> Result<PathBuf, String> {
 fn pipeline_command(config_path: &Path) -> Command {
     let mut command = if let Ok(binary_path) = std::env::var("LIMINAL_BIN") {
         Command::new(binary_path)
+    } else if should_launch_runtime_with_cargo() {
+        cargo_runtime_command()
     } else {
         let candidate = repo_root()
             .join("target")
@@ -726,6 +763,30 @@ fn pipeline_command(config_path: &Path) -> Command {
     command.arg("--config").arg(config_path);
     command.current_dir(repo_root());
     command
+}
+
+fn should_launch_runtime_with_cargo() -> bool {
+    repo_root().join("Cargo.toml").is_file()
+        && Command::new("cargo")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+}
+
+fn cargo_runtime_command() -> Command {
+    let mut cargo = Command::new("cargo");
+    cargo
+        .arg("run")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(repo_root().join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(repo_root().join("target").join("gui-runtime"))
+        .arg("--");
+    cargo
 }
 
 fn spawn_pipeline_log_reader<R>(window: tauri::Window, stream: &str, reader: R)
@@ -1689,7 +1750,6 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use liminal::processors::factory::create_processor;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -2182,6 +2242,39 @@ description = "Rules"
     }
 
     #[test]
+    fn adds_fusion_aggregator_with_descriptor_defaults() {
+        let mut document = parse_document(
+            r#"
+[pipelines.default_pipeline]
+description = "Default"
+"#,
+        );
+        let descriptor = processor_descriptors()
+            .into_iter()
+            .find(|descriptor| descriptor.type_name == "fusion")
+            .expect("fusion descriptor exists");
+
+        add_node_to_document(&mut document, &descriptor, "joiner", Some("default_pipeline"))
+            .expect("fusion stage is added");
+
+        let edited = document.to_string();
+        assert!(edited.contains("[pipelines.default_pipeline.stages.joiner]"));
+        assert!(edited.contains("type = \"fusion\""));
+        assert!(edited.contains("mode = \"merge_objects\""));
+        assert!(edited.contains("conflict_strategy = \"prefix\""));
+        assert!(edited.contains("join_window_ms = 25"));
+
+        let config = toml::from_str::<Config>(&edited).expect("edited config parses");
+        let stage = config
+            .pipelines
+            .get("default_pipeline")
+            .and_then(|pipeline| pipeline.stages.get("joiner"))
+            .expect("new fusion stage exists")
+            .clone();
+        create_processor("fusion", stage).expect("descriptor-created fusion stage can be built");
+    }
+
+    #[test]
     fn popcorn_example_processors_are_constructible() {
         let config = load_config(Path::new("../../config/examples/config_popcorn.toml"))
             .expect("popcorn example loads");
@@ -2206,6 +2299,38 @@ description = "Rules"
             create_processor(&stage.r#type, stage.clone())
                 .unwrap_or_else(|error| panic!("output '{}' can be built: {}", name, error));
         }
+    }
+
+    #[test]
+    fn preflight_reports_real_processor_construction_error() {
+        let config = toml::from_str::<Config>(
+            r#"
+[inputs.sensor]
+type = "simulated"
+output = "raw_data"
+
+[pipelines.main]
+description = "Main"
+
+[pipelines.main.stages.detector]
+type = "rule"
+inputs = ["raw_data"]
+output = "detector_data"
+parameters = { error_strategy = "continue", rules = [{ condition = { field_path = "value", operation = ">", value = 10 }, actions = [{ type = "keep_only_fields", field_paths = "[]" }], else_actions = [] }] }
+
+[outputs.console]
+type = "console"
+inputs = ["detector_data"]
+"#,
+        )
+        .expect("bad runtime config still parses structurally");
+
+        let error = preflight_processors(&config)
+            .expect_err("invalid processor parameters are rejected before launch");
+
+        assert!(error.contains("Runtime preflight failed for stage 'main.detector'"));
+        assert!(error.contains("processor 'rule' could not be created"));
+        assert!(error.contains("invalid rules parameter"));
     }
 
     #[test]

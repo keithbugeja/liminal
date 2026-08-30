@@ -27,6 +27,7 @@ impl ProcessorConfig for TcpInputConfig {
 
 pub struct TcpInputProcessor {
     name: String,
+    #[allow(dead_code)]
     config: TcpInputConfig,
     timing: TimingMixin,
     connection: TcpConnection,

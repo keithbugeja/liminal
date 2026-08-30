@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 /// Represents a pipeline consisting of multiple stages.
+#[allow(dead_code)]
 struct Pipeline {
     name: String,
     description: String,
@@ -221,11 +222,10 @@ impl PipelineManager {
             // Use the type as name of the stage
             // if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {
 
-            if let Some(stage) = create_stage(&stage_name, stage_config.clone()) {
-                stages.insert(stage_name.clone(), Arc::new(Mutex::new(stage)));
-            } else {
-                return Err(anyhow::anyhow!("Failed to create stage: '{}'", stage_name));
-            }
+            let stage = create_stage(&stage_name, stage_config.clone()).map_err(|error| {
+                anyhow::anyhow!("Failed to create stage '{}': {}", stage_name, error)
+            })?;
+            stages.insert(stage_name.clone(), Arc::new(Mutex::new(stage)));
         }
 
         Ok(stages)
