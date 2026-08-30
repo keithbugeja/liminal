@@ -2139,6 +2139,85 @@ button {
   height: 100%;
 }
 
+.flow-debug-overlay {
+  position: absolute;
+  z-index: 35;
+  left: 14px;
+  bottom: 14px;
+  width: 300px;
+  max-width: calc(100% - 28px);
+  padding: 10px;
+  border: 1px solid #725f25;
+  border-radius: 8px;
+  color: #d7e4df;
+  background: rgba(12, 13, 8, 0.95);
+  box-shadow:
+    0 16px 42px rgba(0, 0, 0, 0.34),
+    0 0 0 1px rgba(240, 196, 108, 0.05);
+  font-size: 11px;
+}
+
+.flow-debug-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.flow-debug-title span {
+  color: #f0c46c;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.flow-debug-title button {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #725f25;
+  border-radius: 6px;
+  color: #ffe0a0;
+  background: #17150d;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.flow-debug-title button:hover {
+  border-color: #f0c46c;
+  color: #fff7df;
+}
+
+.flow-debug-overlay dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px 8px;
+  margin: 0;
+}
+
+.flow-debug-overlay div {
+  min-width: 0;
+}
+
+.flow-debug-overlay dt {
+  color: #8fa09b;
+  font-size: 9px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.flow-debug-overlay dd {
+  min-width: 0;
+  margin: 1px 0 0;
+  overflow: hidden;
+  color: #f2fffc;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.flow-debug-overlay dl div:nth-child(n + 5) {
+  grid-column: 1 / -1;
+}
+
 .react-flow__controls {
   overflow: hidden;
   border: 1px solid #22383c;

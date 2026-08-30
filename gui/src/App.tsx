@@ -4,7 +4,6 @@ import {
   Background,
   BaseEdge,
   Connection,
-  CoordinateExtent,
   Controls,
   Edge,
   EdgeChange,
@@ -208,6 +207,16 @@ type DeleteImpact = {
 type LayoutPosition = {
   x: number;
   y: number;
+};
+
+type FlowDebugSnapshot = {
+  appNodes: number;
+  renderedNodes: number;
+  appEdges: number;
+  renderedEdges: number;
+  viewportX: number;
+  viewportY: number;
+  zoom: number;
 };
 
 type PendingDelete = {
@@ -3520,11 +3529,13 @@ function GraphCanvas({
 }) {
   const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
   const [layoutRevision, setLayoutRevision] = useState(0);
+  const [flowRevision, setFlowRevision] = useState(0);
   const previousConfigPath = useRef(configPath);
   const previousFitKey = useRef<string | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const [nodePositions, setNodePositions] = useState<Record<string, LayoutPosition>>(savedLayout);
+  const [debugSnapshot, setDebugSnapshot] = useState<FlowDebugSnapshot | null>(null);
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
   const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
   const focusState = useMemo(
@@ -3654,7 +3665,27 @@ function GraphCanvas({
       };
     });
   }, [channelByName, focusState, graph, onSelectEdge, runtimeActivity, selectedEdgeId]);
-  const graphExtent = useMemo(() => graphCoordinateExtent(flowNodes), [flowNodes]);
+  const flowKey = `${configPath}:${flowRevision}`;
+  const updateDebugSnapshot = useCallback(() => {
+    const viewport = reactFlow.getViewport();
+    setDebugSnapshot({
+      appNodes: flowNodes.length,
+      renderedNodes: reactFlow.getNodes().length,
+      appEdges: flowEdges.length,
+      renderedEdges: reactFlow.getEdges().length,
+      viewportX: Math.round(viewport.x),
+      viewportY: Math.round(viewport.y),
+      zoom: Number(viewport.zoom.toFixed(3)),
+    });
+  }, [flowEdges.length, flowNodes.length, reactFlow]);
+  const recoverFlowView = useCallback(() => {
+    setFlowRevision((revision) => revision + 1);
+    previousFitKey.current = null;
+    window.requestAnimationFrame(() => {
+      reactFlow.fitView({ padding: 0.18, duration: 180 });
+      window.setTimeout(updateDebugSnapshot, 220);
+    });
+  }, [reactFlow, updateDebugSnapshot]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<FlowNodeData>>[]) => {
@@ -3708,6 +3739,11 @@ function GraphCanvas({
   }, [configPath, savedLayout]);
 
   useEffect(() => {
+    previousFitKey.current = null;
+    setFlowRevision((revision) => revision + 1);
+  }, [graph]);
+
+  useEffect(() => {
     if (!graph || flowNodes.length === 0) {
       return;
     }
@@ -3728,6 +3764,12 @@ function GraphCanvas({
       pruneStoredLayout(configPath, graph.nodes);
     }
   }, [configPath, graph]);
+
+  useEffect(() => {
+    updateDebugSnapshot();
+    const interval = window.setInterval(updateDebugSnapshot, 500);
+    return () => window.clearInterval(interval);
+  }, [updateDebugSnapshot]);
 
   if (loadState === "error") {
     return (
@@ -3789,6 +3831,7 @@ function GraphCanvas({
       />
       <div className="flow-area">
         <ReactFlow
+          key={flowKey}
           nodes={flowNodes}
           edges={flowEdges}
           nodeTypes={nodeTypes}
@@ -3833,10 +3876,6 @@ function GraphCanvas({
           nodesDraggable
           nodesConnectable
           elementsSelectable
-          translateExtent={graphExtent}
-          nodeExtent={graphExtent}
-          minZoom={0.25}
-          maxZoom={1.6}
         >
           <Background color="#243235" gap={24} size={1} />
           <MiniMap
@@ -3857,7 +3896,75 @@ function GraphCanvas({
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
+      <FlowDebugOverlay
+        snapshot={debugSnapshot}
+        configPath={configPath}
+        flowKey={flowKey}
+        runtimeState={runtimeState}
+        onRecover={recoverFlowView}
+      />
     </div>
+  );
+}
+
+function FlowDebugOverlay({
+  snapshot,
+  configPath,
+  flowKey,
+  runtimeState,
+  onRecover,
+}: {
+  snapshot: FlowDebugSnapshot | null;
+  configPath: string;
+  flowKey: string;
+  runtimeState: RuntimeState;
+  onRecover: () => void;
+}) {
+  return (
+    <aside className="flow-debug-overlay">
+      <div className="flow-debug-title">
+        <span>Flow Debug</span>
+        <button onClick={onRecover}>Recover</button>
+      </div>
+      <dl>
+        <div>
+          <dt>App nodes</dt>
+          <dd>{snapshot?.appNodes ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Flow nodes</dt>
+          <dd>{snapshot?.renderedNodes ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>App edges</dt>
+          <dd>{snapshot?.appEdges ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Flow edges</dt>
+          <dd>{snapshot?.renderedEdges ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Viewport</dt>
+          <dd>
+            {snapshot
+              ? `${snapshot.viewportX}, ${snapshot.viewportY} @ ${snapshot.zoom}`
+              : "-"}
+          </dd>
+        </div>
+        <div>
+          <dt>Runtime</dt>
+          <dd>{runtimeState}</dd>
+        </div>
+        <div>
+          <dt>Config</dt>
+          <dd title={configPath}>{configPath}</dd>
+        </div>
+        <div>
+          <dt>Flow key</dt>
+          <dd title={flowKey}>{flowKey}</dd>
+        </div>
+      </dl>
+    </aside>
   );
 }
 
@@ -5048,35 +5155,6 @@ function writeStoredNodePositions(
   );
 
   window.localStorage.setItem(layoutStorageKey(configPath), JSON.stringify(layout));
-}
-
-function graphCoordinateExtent(nodes: Node<FlowNodeData>[]): CoordinateExtent {
-  if (nodes.length === 0) {
-    return [
-      [-2000, -2000],
-      [4000, 4000],
-    ];
-  }
-
-  const margin = 900;
-  let minX = Number.POSITIVE_INFINITY;
-  let minY = Number.POSITIVE_INFINITY;
-  let maxX = Number.NEGATIVE_INFINITY;
-  let maxY = Number.NEGATIVE_INFINITY;
-
-  nodes.forEach((node) => {
-    const width = 360;
-    const height = estimatedNodeHeight(node.data.graphNode);
-    minX = Math.min(minX, node.position.x);
-    minY = Math.min(minY, node.position.y);
-    maxX = Math.max(maxX, node.position.x + width);
-    maxY = Math.max(maxY, node.position.y + height);
-  });
-
-  return [
-    [Math.floor(minX - margin), Math.floor(minY - margin)],
-    [Math.ceil(maxX + margin), Math.ceil(maxY + margin)],
-  ];
 }
 
 function pruneStoredLayout(configPath: string, nodes: GraphNode[]) {
