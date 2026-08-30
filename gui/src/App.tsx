@@ -19,6 +19,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useStore,
   useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
@@ -218,6 +219,14 @@ type FlowDebugSnapshot = {
   domEdges: number;
   sourceHandles: number;
   targetHandles: number;
+  edgeLayerChildren: number;
+  storeEdges: number;
+  storeEdgeLookup: number;
+  storeNodes: number;
+  storeWidth: number;
+  storeHeight: number;
+  nodesWithDimensions: number;
+  nodesWithHandleBounds: number;
   flowErrors: string[];
   viewportTransform: string;
   viewportX: number;
@@ -3570,6 +3579,52 @@ function GraphCanvas({
   const flowAreaRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const updateNodeInternals = useUpdateNodeInternals();
+  const flowStoreSnapshotText = useStore((state) => {
+    let nodesWithDimensions = 0;
+    let nodesWithHandleBounds = 0;
+
+    state.nodeLookup.forEach((node) => {
+      const width = node.measured?.width ?? node.width ?? node.initialWidth;
+      const height = node.measured?.height ?? node.height ?? node.initialHeight;
+      if (width && height) {
+        nodesWithDimensions += 1;
+      }
+      if (node.internals.handleBounds) {
+        nodesWithHandleBounds += 1;
+      }
+    });
+
+    return [
+      state.edges.length,
+      state.edgeLookup.size,
+      state.nodes.length,
+      Math.round(state.width),
+      Math.round(state.height),
+      nodesWithDimensions,
+      nodesWithHandleBounds,
+    ].join("|");
+  });
+  const flowStoreSnapshot = useMemo(() => {
+    const [
+      edges = "0",
+      edgeLookup = "0",
+      nodes = "0",
+      width = "0",
+      height = "0",
+      nodesWithDimensions = "0",
+      nodesWithHandleBounds = "0",
+    ] = flowStoreSnapshotText.split("|");
+
+    return {
+      edgeLookup: Number(edgeLookup),
+      edges: Number(edges),
+      height: Number(height),
+      nodes: Number(nodes),
+      nodesWithDimensions: Number(nodesWithDimensions),
+      nodesWithHandleBounds: Number(nodesWithHandleBounds),
+      width: Number(width),
+    };
+  }, [flowStoreSnapshotText]);
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const [nodePositions, setNodePositions] = useState<Record<string, LayoutPosition>>(savedLayout);
   const [debugSnapshot, setDebugSnapshot] = useState<FlowDebugSnapshot | null>(null);
@@ -3710,6 +3765,7 @@ function GraphCanvas({
     const viewport = reactFlow.getViewport();
     const flowArea = flowAreaRef.current;
     const viewportElement = flowArea?.querySelector<HTMLElement>(".react-flow__viewport") ?? null;
+    const edgeLayer = flowArea?.querySelector<HTMLElement>(".react-flow__edges") ?? null;
     const domNodes = flowArea?.querySelectorAll(".react-flow__node").length ?? 0;
     const domEdges = flowArea?.querySelectorAll(".react-flow__edge").length ?? 0;
     const sourceHandles =
@@ -3726,13 +3782,21 @@ function GraphCanvas({
       domEdges,
       sourceHandles,
       targetHandles,
+      edgeLayerChildren: edgeLayer?.children.length ?? 0,
+      storeEdges: flowStoreSnapshot.edges,
+      storeEdgeLookup: flowStoreSnapshot.edgeLookup,
+      storeNodes: flowStoreSnapshot.nodes,
+      storeWidth: flowStoreSnapshot.width,
+      storeHeight: flowStoreSnapshot.height,
+      nodesWithDimensions: flowStoreSnapshot.nodesWithDimensions,
+      nodesWithHandleBounds: flowStoreSnapshot.nodesWithHandleBounds,
       flowErrors,
       viewportTransform: viewportElement?.style.transform || "none",
       viewportX: Math.round(viewport.x),
       viewportY: Math.round(viewport.y),
       zoom: Number(viewport.zoom.toFixed(3)),
     });
-  }, [flowEdges.length, flowErrors, flowNodes.length, reactFlow]);
+  }, [flowEdges.length, flowErrors, flowNodes.length, flowStoreSnapshot, reactFlow]);
 
   const recordFlowError = useCallback((id: string, message: string) => {
     setFlowErrors((currentErrors) => {
@@ -4010,6 +4074,8 @@ function GraphCanvas({
           onPaneClick={() => {
             onSelectNode(null);
           }}
+          onlyRenderVisibleElements={false}
+          colorMode="dark"
           nodesDraggable
           nodesConnectable
           elementsSelectable
@@ -4080,12 +4146,44 @@ function FlowDebugOverlay({
           <dd>{snapshot?.domEdges ?? "-"}</dd>
         </div>
         <div>
+          <dt>Edge layer children</dt>
+          <dd>{snapshot?.edgeLayerChildren ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Store edges</dt>
+          <dd>{snapshot?.storeEdges ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Store edge lookup</dt>
+          <dd>{snapshot?.storeEdgeLookup ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Store nodes</dt>
+          <dd>{snapshot?.storeNodes ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Store size</dt>
+          <dd>
+            {snapshot
+              ? `${snapshot.storeWidth} x ${snapshot.storeHeight}`
+              : "-"}
+          </dd>
+        </div>
+        <div>
           <dt>Source handles</dt>
           <dd>{snapshot?.sourceHandles ?? "-"}</dd>
         </div>
         <div>
           <dt>Target handles</dt>
           <dd>{snapshot?.targetHandles ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Measured nodes</dt>
+          <dd>{snapshot?.nodesWithDimensions ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Handle-bound nodes</dt>
+          <dd>{snapshot?.nodesWithHandleBounds ?? "-"}</dd>
         </div>
         <div>
           <dt>Viewport</dt>
