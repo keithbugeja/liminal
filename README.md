@@ -399,8 +399,8 @@ cd gui
 npm run tauri build
 ```
 
-During development, the GUI starts the Liminal runtime by using
-`target/debug/liminal.exe` when it exists, or by falling back to `cargo run`. Build the
+During development, the GUI starts the Liminal runtime by using the platform-specific
+binary in `target/debug/` when it exists, or by falling back to `cargo run`. Build the
 runtime first if you want startup to avoid the Cargo fallback:
 
 ```bash

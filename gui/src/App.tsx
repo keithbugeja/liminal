@@ -2217,7 +2217,13 @@ function NodeInspector({
               />
             ))}
             {missingParameterFields.map((field) => (
-              <MissingParameterRow key={field.key} field={field} />
+              <MissingParameterRow
+                key={field.key}
+                nodeId={node.id}
+                field={field}
+                saveState={saveState}
+                onUpdateParameterJson={onUpdateParameterJson}
+              />
             ))}
           </div>
         )}
@@ -2321,7 +2327,39 @@ function ParameterRow({
   );
 }
 
-function MissingParameterRow({ field }: { field: FieldSpec }) {
+function MissingParameterRow({
+  nodeId,
+  field,
+  saveState,
+  onUpdateParameterJson,
+}: {
+  nodeId: string;
+  field: FieldSpec;
+  saveState: SaveState;
+  onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
+}) {
+  if (field.renderer === "rule_builder" && field.schema) {
+    return (
+      <div className="parameter-row read-only missing-parameter">
+        <div className="parameter-label">
+          <strong title={field.key}>{field.label}</strong>
+          <span>{field.kind}</span>
+        </div>
+        {field.help && <p className="parameter-help">{field.help}</p>}
+        <RuleParameterEditor
+          nodeId={nodeId}
+          parameterKey={field.key}
+          value={[]}
+          schema={field.schema}
+          saveState={saveState}
+          onUpdateParameterJson={onUpdateParameterJson}
+        />
+      </div>
+    );
+  }
+
+  const defaultValue = defaultValueForField(field);
+
   return (
     <div className="parameter-row read-only missing-parameter">
       <div className="parameter-label">
@@ -2333,6 +2371,12 @@ function MissingParameterRow({ field }: { field: FieldSpec }) {
         <span>{field.required ? "required" : "default"}</span>
         <strong>{field.default_value ?? "not set"}</strong>
       </div>
+      <button
+        disabled={saveState === "saving"}
+        onClick={() => onUpdateParameterJson(nodeId, field.key, defaultValue)}
+      >
+        Add
+      </button>
     </div>
   );
 }

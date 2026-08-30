@@ -1006,7 +1006,8 @@ mod tests {
 
     #[test]
     fn resolves_existing_example_configs() {
-        for entry in fs::read_dir("config/examples").expect("example config dir exists") {
+        let examples_dir = std::path::Path::new("config").join("examples");
+        for entry in fs::read_dir(examples_dir).expect("example config dir exists") {
             let entry = entry.expect("example config entry is readable");
             let path = entry.path();
 

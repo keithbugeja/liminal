@@ -556,7 +556,7 @@ fn update_node_field(
 #[tauri::command]
 fn list_example_configs() -> Result<Vec<String>, String> {
     let examples_dir = repo_root().join("config").join("examples");
-    let mut configs = vec!["config/config.toml".to_string()];
+    let mut configs = vec![relative_to_repo(&repo_root().join("config").join("config.toml"))];
 
     for entry in fs::read_dir(&examples_dir)
         .map_err(|error| format!("Failed to read '{}': {}", examples_dir.display(), error))?
@@ -707,7 +707,7 @@ fn pipeline_command(config_path: &Path) -> Command {
         let candidate = repo_root()
             .join("target")
             .join("debug")
-            .join(if cfg!(windows) { "liminal.exe" } else { "liminal" });
+            .join(format!("liminal{}", std::env::consts::EXE_SUFFIX));
 
         if candidate.exists() {
             Command::new(candidate)
@@ -960,17 +960,45 @@ fn update_json_parameter(
     if let Some(table) = parameters.as_table_mut() {
         table[parameter_key] = next_item;
         Ok(())
-    } else if let Some(inline_table) = parameters.as_inline_table_mut() {
-        let next_value = next_item
-            .into_value()
-            .map_err(|_| "Inline parameters cannot store this nested value".to_string())?;
-        inline_table.insert(parameter_key, next_value);
-        Ok(())
+    } else if parameters.is_inline_table() {
+        if !json_value_needs_table(value) {
+            let next_value = next_item
+                .clone()
+                .into_value()
+                .map_err(|_| "Inline parameters cannot store this nested value".to_string())?;
+            let inline_table = parameters
+                .as_inline_table_mut()
+                .ok_or_else(|| format!("Node '{}' parameters are not editable as a table", node_id))?;
+            inline_table.insert(parameter_key, next_value);
+            Ok(())
+        } else {
+            let existing_inline = parameters
+                .as_inline_table()
+                .ok_or_else(|| format!("Node '{}' parameters are not editable as a table", node_id))?
+                .clone();
+            let mut table = Table::new();
+            for (key, value) in existing_inline.iter() {
+                table[key] = Item::Value(value.clone());
+            }
+            table[parameter_key] = next_item;
+            *parameters = Item::Table(table);
+            Ok(())
+        }
     } else {
         Err(format!(
             "Node '{}' parameters are not editable as a table",
             node_id
         ))
+    }
+}
+
+fn json_value_needs_table(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Array(values) => values
+            .iter()
+            .any(|value| matches!(value, serde_json::Value::Array(_) | serde_json::Value::Object(_))),
+        serde_json::Value::Object(_) => true,
+        _ => false,
     }
 }
 
@@ -1988,6 +2016,54 @@ actions = [{ type = "pass_through" }]
             parsed["pipelines"]["rules"]["stages"]["filter"]["parameters"]["rules"][0]["condition"]
                 ["field_path"],
             "temperature"
+        );
+    }
+
+    #[test]
+    fn adds_nested_rules_parameter_to_inline_defaults() {
+        let mut document = parse_document(
+            r#"
+[pipelines.rules]
+description = "Rule pipeline"
+
+[pipelines.rules.stages.filter]
+type = "rule"
+inputs = ["raw_data"]
+output = "filtered_data"
+parameters = { error_strategy = "continue" }
+"#,
+        );
+        let value = serde_json::json!([
+            {
+                "condition": { "field_path": "device_id", "operation": "equals", "value": "imu" },
+                "actions": [
+                    { "type": "pass_through" }
+                ],
+                "else_actions": []
+            }
+        ]);
+
+        update_json_parameter(
+            &mut document,
+            "pipeline:rules.stage:filter",
+            "rules",
+            &value,
+        )
+        .expect("missing nested rule parameter is added");
+
+        let edited = document.to_string();
+
+        let parsed: serde_json::Value = toml::from_str::<toml::Value>(&edited)
+            .expect("edited TOML parses")
+            .try_into()
+            .expect("edited TOML converts to JSON");
+
+        assert!(edited.contains("error_strategy = \"continue\""));
+        assert!(edited.contains("device_id"));
+        assert_eq!(
+            parsed["pipelines"]["rules"]["stages"]["filter"]["parameters"]["rules"][0]["condition"]
+                ["field_path"],
+            "device_id"
         );
     }
 

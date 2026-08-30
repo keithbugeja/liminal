@@ -3,10 +3,30 @@
 [inputs.simulated]
 type = "simulated"
 output = "simulated_data"
-parameters = { interval_ms = 1000, distribution = "uniform", min_value = 0.0, max_value = 100.0 }
+parameters = { interval_ms = 500, distribution = "uniform", min_value = 0.0, max_value = 100.0 }
 
 [outputs]
 
 [outputs.console]
 type = "console"
 inputs = ["simulated_data"]
+
+[outputs.console_2]
+type = "console"
+inputs = ["rule_data"]
+
+[pipelines]
+
+[pipelines.default_pipeline]
+description = "default_pipeline pipeline"
+
+[pipelines.default_pipeline.stages]
+
+[pipelines.default_pipeline.stages.rule]
+type = "rule"
+inputs = ["simulated_data"]
+output = "rule_data"
+
+[pipelines.default_pipeline.stages.rule.parameters ]
+error_strategy = "continue" 
+rules = [{ actions = [{ type = "pass_through" }], condition = { field_path = "value", operation = ">", value = 50 }, else_actions = [{ type = "drop_message" }] }]
