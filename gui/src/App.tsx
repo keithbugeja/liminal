@@ -19,6 +19,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useReactFlow,
+  useUpdateNodeInternals,
 } from "@xyflow/react";
 import {
   AlertCircle,
@@ -215,6 +216,9 @@ type FlowDebugSnapshot = {
   renderedEdges: number;
   domNodes: number;
   domEdges: number;
+  sourceHandles: number;
+  targetHandles: number;
+  flowErrors: string[];
   viewportTransform: string;
   viewportX: number;
   viewportY: number;
@@ -3565,9 +3569,11 @@ function GraphCanvas({
   const previousFitKey = useRef<string | null>(null);
   const flowAreaRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
+  const updateNodeInternals = useUpdateNodeInternals();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const [nodePositions, setNodePositions] = useState<Record<string, LayoutPosition>>(savedLayout);
   const [debugSnapshot, setDebugSnapshot] = useState<FlowDebugSnapshot | null>(null);
+  const [flowErrors, setFlowErrors] = useState<string[]>([]);
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
   const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
   const focusState = useMemo(
@@ -3583,6 +3589,8 @@ function GraphCanvas({
     () => runtimeActivityFromLogs(graph, runtimeLogs),
     [graph, runtimeLogs],
   );
+  const graphNodeIds = useMemo(() => graph?.nodes.map((node) => node.id) ?? [], [graph]);
+  const graphNodeIdsKey = graphNodeIds.join("|");
 
   const flowNodes = useMemo<Node<FlowNodeData>[]>(() => {
     const query = filterText.trim().toLowerCase();
@@ -3704,6 +3712,10 @@ function GraphCanvas({
     const viewportElement = flowArea?.querySelector<HTMLElement>(".react-flow__viewport") ?? null;
     const domNodes = flowArea?.querySelectorAll(".react-flow__node").length ?? 0;
     const domEdges = flowArea?.querySelectorAll(".react-flow__edge").length ?? 0;
+    const sourceHandles =
+      flowArea?.querySelectorAll(".react-flow__handle.source, .xyflow__handle.source").length ?? 0;
+    const targetHandles =
+      flowArea?.querySelectorAll(".react-flow__handle.target, .xyflow__handle.target").length ?? 0;
 
     setDebugSnapshot({
       appNodes: flowNodes.length,
@@ -3712,12 +3724,32 @@ function GraphCanvas({
       renderedEdges: reactFlow.getEdges().length,
       domNodes,
       domEdges,
+      sourceHandles,
+      targetHandles,
+      flowErrors,
       viewportTransform: viewportElement?.style.transform || "none",
       viewportX: Math.round(viewport.x),
       viewportY: Math.round(viewport.y),
       zoom: Number(viewport.zoom.toFixed(3)),
     });
-  }, [flowEdges.length, flowNodes.length, reactFlow]);
+  }, [flowEdges.length, flowErrors, flowNodes.length, reactFlow]);
+
+  const recordFlowError = useCallback((id: string, message: string) => {
+    setFlowErrors((currentErrors) => {
+      const nextError = `${id}: ${message}`;
+      return [nextError, ...currentErrors.filter((error) => error !== nextError)].slice(0, 5);
+    });
+  }, []);
+
+  const refreshFlowGeometry = useCallback(() => {
+    if (graphNodeIds.length === 0) {
+      return;
+    }
+
+    updateNodeInternals(graphNodeIds);
+    window.setTimeout(updateDebugSnapshot, 80);
+  }, [graphNodeIds, updateDebugSnapshot, updateNodeInternals]);
+
   const recoverFlowView = useCallback(() => {
     setFlowRevision((revision) => revision + 1);
     previousFitKey.current = null;
@@ -3726,6 +3758,35 @@ function GraphCanvas({
       window.setTimeout(updateDebugSnapshot, 220);
     });
   }, [reactFlow, updateDebugSnapshot]);
+
+  useEffect(() => {
+    window.requestAnimationFrame(refreshFlowGeometry);
+  }, [configPath, graphNodeIdsKey, refreshFlowGeometry]);
+
+  useEffect(() => {
+    let frame: number | null = null;
+
+    const scheduleGeometryRefresh = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        refreshFlowGeometry();
+      });
+    };
+
+    window.addEventListener("scroll", scheduleGeometryRefresh, true);
+    window.addEventListener("resize", scheduleGeometryRefresh);
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("scroll", scheduleGeometryRefresh, true);
+      window.removeEventListener("resize", scheduleGeometryRefresh);
+    };
+  }, [refreshFlowGeometry]);
 
   useEffect(() => {
     const toggleFlowDebug = (event: KeyboardEvent) => {
@@ -3793,6 +3854,7 @@ function GraphCanvas({
     if (previousConfigPath.current !== configPath) {
       previousConfigPath.current = configPath;
       setNodePositions(savedLayout);
+      setFlowErrors([]);
     }
   }, [configPath, savedLayout]);
 
@@ -3912,6 +3974,7 @@ function GraphCanvas({
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
+          onError={recordFlowError}
           onConnect={onConnect}
           isValidConnection={isValidConnection}
           onConnectStart={(_, params) => setConnectionSourceNodeId(params.nodeId ?? null)}
@@ -4017,6 +4080,14 @@ function FlowDebugOverlay({
           <dd>{snapshot?.domEdges ?? "-"}</dd>
         </div>
         <div>
+          <dt>Source handles</dt>
+          <dd>{snapshot?.sourceHandles ?? "-"}</dd>
+        </div>
+        <div>
+          <dt>Target handles</dt>
+          <dd>{snapshot?.targetHandles ?? "-"}</dd>
+        </div>
+        <div>
           <dt>Viewport</dt>
           <dd>
             {snapshot
@@ -4039,6 +4110,12 @@ function FlowDebugOverlay({
         <div>
           <dt>Flow key</dt>
           <dd title={flowKey}>{flowKey}</dd>
+        </div>
+        <div>
+          <dt>Flow errors</dt>
+          <dd title={snapshot?.flowErrors.join("\n") ?? ""}>
+            {snapshot?.flowErrors.length ? snapshot.flowErrors.join(" | ") : "none"}
+          </dd>
         </div>
       </dl>
     </aside>
