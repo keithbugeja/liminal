@@ -3814,6 +3814,25 @@ function GraphCanvas({
     window.setTimeout(updateDebugSnapshot, 80);
   }, [graphNodeIds, updateDebugSnapshot, updateNodeInternals]);
 
+  const hasMissingEdgeDom = useCallback(() => {
+    const flowArea = flowAreaRef.current;
+    if (!flowArea || flowEdges.length === 0) {
+      return false;
+    }
+
+    const domNodes = flowArea.querySelectorAll(".react-flow__node").length;
+    const domEdges = flowArea.querySelectorAll(".react-flow__edge").length;
+    return domNodes > 0 && domEdges < flowEdges.length;
+  }, [flowEdges.length]);
+
+  const repairMissingEdgeDom = useCallback(() => {
+    if (hasMissingEdgeDom()) {
+      refreshFlowGeometry();
+    } else {
+      updateDebugSnapshot();
+    }
+  }, [hasMissingEdgeDom, refreshFlowGeometry, updateDebugSnapshot]);
+
   const recoverFlowView = useCallback(() => {
     setFlowRevision((revision) => revision + 1);
     previousFitKey.current = null;
@@ -3829,6 +3848,7 @@ function GraphCanvas({
 
   useEffect(() => {
     let frame: number | null = null;
+    const flowArea = flowAreaRef.current;
 
     const scheduleGeometryRefresh = () => {
       if (frame !== null) {
@@ -3841,16 +3861,45 @@ function GraphCanvas({
       });
     };
 
-    window.addEventListener("scroll", scheduleGeometryRefresh, true);
     window.addEventListener("resize", scheduleGeometryRefresh);
+    const resizeObserver = new ResizeObserver(scheduleGeometryRefresh);
+    if (flowArea) {
+      resizeObserver.observe(flowArea);
+    }
+
     return () => {
       if (frame !== null) {
         window.cancelAnimationFrame(frame);
       }
-      window.removeEventListener("scroll", scheduleGeometryRefresh, true);
       window.removeEventListener("resize", scheduleGeometryRefresh);
+      resizeObserver.disconnect();
     };
   }, [refreshFlowGeometry]);
+
+  useEffect(() => {
+    let frame: number | null = null;
+
+    const scheduleMissingEdgeRepair = () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+
+      frame = window.requestAnimationFrame(() => {
+        frame = null;
+        repairMissingEdgeDom();
+      });
+    };
+
+    window.addEventListener("scroll", scheduleMissingEdgeRepair, true);
+    const interval = window.setInterval(repairMissingEdgeDom, 500);
+    return () => {
+      if (frame !== null) {
+        window.cancelAnimationFrame(frame);
+      }
+      window.removeEventListener("scroll", scheduleMissingEdgeRepair, true);
+      window.clearInterval(interval);
+    };
+  }, [repairMissingEdgeDom]);
 
   useEffect(() => {
     const toggleFlowDebug = (event: KeyboardEvent) => {
