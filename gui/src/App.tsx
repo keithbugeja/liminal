@@ -4036,7 +4036,7 @@ function GraphCanvas({
   const [flowRevision, setFlowRevision] = useState(0);
   const [debugExpanded, setDebugExpanded] = useState(false);
   const previousConfigPath = useRef(configPath);
-  const previousFitKey = useRef<string | null>(null);
+  const fittedConfigPath = useRef<string | null>(null);
   const flowAreaRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const updateNodeInternals = useUpdateNodeInternals();
@@ -4296,7 +4296,7 @@ function GraphCanvas({
 
   const recoverFlowView = useCallback(() => {
     setFlowRevision((revision) => revision + 1);
-    previousFitKey.current = null;
+    fittedConfigPath.current = null;
     window.requestAnimationFrame(() => {
       reactFlow.fitView({ padding: 0.18, duration: 180 });
       window.setTimeout(updateDebugSnapshot, 220);
@@ -4429,25 +4429,20 @@ function GraphCanvas({
       previousConfigPath.current = configPath;
       setNodePositions(savedLayout);
       setFlowErrors([]);
+      fittedConfigPath.current = null;
     }
   }, [configPath, savedLayout]);
-
-  useEffect(() => {
-    previousFitKey.current = null;
-    setFlowRevision((revision) => revision + 1);
-  }, [graph]);
 
   useEffect(() => {
     if (!graph || flowNodes.length === 0) {
       return;
     }
 
-    const fitKey = `${configPath}:${graph.nodes.map((node) => node.id).join("|")}`;
-    if (previousFitKey.current === fitKey) {
+    if (fittedConfigPath.current === configPath) {
       return;
     }
 
-    previousFitKey.current = fitKey;
+    fittedConfigPath.current = configPath;
     window.requestAnimationFrame(() => {
       reactFlow.fitView({ padding: 0.18, duration: 180 });
     });
