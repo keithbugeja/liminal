@@ -221,6 +221,11 @@ type FlowDebugSnapshot = {
   zoom: number;
 };
 
+type ViewportSize = {
+  width: number;
+  height: number;
+};
+
 type PendingDelete = {
   node: GraphNode;
   impact: DeleteImpact;
@@ -256,6 +261,7 @@ const nodeGap = 96;
 const defaultInspectorWidth = 520;
 const minInspectorWidth = 330;
 const maxInspectorWidth = 980;
+const minGraphColumnWidth = 640;
 const inspectorWidthStorageKey = "liminal.inspectorWidth";
 const layoutStoragePrefix = "liminal.layout.";
 const recentConfigsStorageKey = "liminal.recentConfigs";
@@ -318,6 +324,7 @@ function App() {
     readStoredCollapsedState(inspectorCollapsedStorageKey),
   );
   const [compactDensity, setCompactDensity] = useState(isCompactDensityViewport);
+  const [viewportSize, setViewportSize] = useState(readViewportSize);
   const searchInputRef = useRef<HTMLInputElement>(null);
   const isDirty = savedContent !== null && draftContent !== null && savedContent !== draftContent;
 
@@ -1099,10 +1106,24 @@ function App() {
   }, [inspectorCollapsed]);
 
   useEffect(() => {
-    const updateDensity = () => setCompactDensity(isCompactDensityViewport());
-    window.addEventListener("resize", updateDensity);
-    return () => window.removeEventListener("resize", updateDensity);
+    const updateViewport = () => {
+      setCompactDensity(isCompactDensityViewport());
+      setViewportSize(readViewportSize());
+    };
+    window.addEventListener("resize", updateViewport);
+    return () => window.removeEventListener("resize", updateViewport);
   }, []);
+
+  const fileSidebarWidth = fileSidebarCollapsed ? 48 : compactDensity ? 280 : 320;
+  const toolsSidebarWidth = toolsSidebarCollapsed ? 48 : compactDensity ? 300 : 330;
+  const resizerWidth = inspectorCollapsed ? 0 : 8;
+  const maxEffectiveInspectorWidth = Math.max(
+    minInspectorWidth,
+    viewportSize.width - fileSidebarWidth - toolsSidebarWidth - resizerWidth - minGraphColumnWidth,
+  );
+  const effectiveInspectorWidth = inspectorCollapsed
+    ? 48
+    : Math.min(inspectorWidth, maxEffectiveInspectorWidth);
 
   return (
     <ReactFlowProvider>
@@ -1110,11 +1131,11 @@ function App() {
         className={compactDensity ? "app-shell compact-density" : "app-shell"}
         style={{
           gridTemplateColumns: [
-            `${fileSidebarCollapsed ? 48 : compactDensity ? 280 : 320}px`,
-            `${toolsSidebarCollapsed ? 48 : compactDensity ? 300 : 330}px`,
+            `${fileSidebarWidth}px`,
+            `${toolsSidebarWidth}px`,
             "minmax(0, 1fr)",
-            `${inspectorCollapsed ? 0 : 8}px`,
-            `${inspectorCollapsed ? 48 : inspectorWidth}px`,
+            `${resizerWidth}px`,
+            `${effectiveInspectorWidth}px`,
           ].join(" "),
         }}
       >
@@ -3706,6 +3727,24 @@ function GraphCanvas({
     });
   }, [reactFlow, updateDebugSnapshot]);
 
+  useEffect(() => {
+    const toggleFlowDebug = (event: KeyboardEvent) => {
+      if (!event.shiftKey || !(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "d") {
+        return;
+      }
+
+      if (isTextEditingTarget(event.target)) {
+        return;
+      }
+
+      event.preventDefault();
+      setDebugExpanded((expanded) => !expanded);
+    };
+
+    window.addEventListener("keydown", toggleFlowDebug);
+    return () => window.removeEventListener("keydown", toggleFlowDebug);
+  }, []);
+
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<FlowNodeData>>[]) => {
       const removeChanges = changes.filter((change) => change.type === "remove");
@@ -3838,6 +3877,22 @@ function GraphCanvas({
         >
           <RotateCcw size={15} />
         </button>
+        <button
+          className={debugExpanded ? "debug-toolbar-button active" : "debug-toolbar-button"}
+          onClick={() => setDebugExpanded((expanded) => !expanded)}
+          title={debugExpanded ? "Hide flow debug (Cmd/Ctrl+Shift+D)" : "Show flow debug (Cmd/Ctrl+Shift+D)"}
+          aria-label={debugExpanded ? "Hide flow debug" : "Show flow debug"}
+        >
+          Debug
+        </button>
+        <button
+          className="debug-toolbar-button"
+          onClick={recoverFlowView}
+          title="Recover graph renderer"
+          aria-label="Recover graph renderer"
+        >
+          Recover
+        </button>
       </div>
       <RuntimeConsole
         logs={runtimeLogs}
@@ -3900,15 +3955,16 @@ function GraphCanvas({
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
-      <FlowDebugOverlay
-        snapshot={debugSnapshot}
-        configPath={configPath}
-        flowKey={flowKey}
-        runtimeState={runtimeState}
-        expanded={debugExpanded}
-        onToggleExpanded={() => setDebugExpanded((expanded) => !expanded)}
-        onRecover={recoverFlowView}
-      />
+      {debugExpanded && (
+        <FlowDebugOverlay
+          snapshot={debugSnapshot}
+          configPath={configPath}
+          flowKey={flowKey}
+          runtimeState={runtimeState}
+          onClose={() => setDebugExpanded(false)}
+          onRecover={recoverFlowView}
+        />
+      )}
     </div>
   );
 }
@@ -3918,31 +3974,20 @@ function FlowDebugOverlay({
   configPath,
   flowKey,
   runtimeState,
-  expanded,
-  onToggleExpanded,
+  onClose,
   onRecover,
 }: {
   snapshot: FlowDebugSnapshot | null;
   configPath: string;
   flowKey: string;
   runtimeState: RuntimeState;
-  expanded: boolean;
-  onToggleExpanded: () => void;
+  onClose: () => void;
   onRecover: () => void;
 }) {
-  if (!expanded) {
-    return (
-      <aside className="flow-debug-overlay collapsed">
-        <button onClick={onToggleExpanded}>Debug</button>
-        <button onClick={onRecover}>Recover</button>
-      </aside>
-    );
-  }
-
   return (
     <aside className="flow-debug-overlay">
       <div className="flow-debug-title">
-        <button onClick={onToggleExpanded}>Hide</button>
+        <button onClick={onClose}>Hide</button>
         <span>Flow Debug</span>
         <button onClick={onRecover}>Recover</button>
       </div>
@@ -5102,6 +5147,13 @@ function clampInspectorWidth(width: number) {
 function isCompactDensityViewport() {
   const isApplePlatform = /Mac|iPhone|iPad|iPod/.test(window.navigator.platform);
   return isApplePlatform || window.innerHeight <= 920;
+}
+
+function readViewportSize(): ViewportSize {
+  return {
+    width: window.innerWidth,
+    height: window.innerHeight,
+  };
 }
 
 function readStoredRecentConfigs() {

@@ -10,6 +10,14 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
 body {
   margin: 0;
   min-width: 1120px;
@@ -2008,6 +2016,22 @@ button {
   background: #18170f;
 }
 
+.layout-toolbar .debug-toolbar-button {
+  width: auto;
+  min-width: 0;
+  padding: 0 10px;
+  border-color: #725f25;
+  color: #ffe0a0;
+  background: #17150d;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.layout-toolbar .debug-toolbar-button.active {
+  border-color: #f0c46c;
+  color: #fff7df;
+}
+
 .runtime-console {
   position: absolute;
   z-index: 23;
@@ -2179,7 +2203,7 @@ button {
 .flow-debug-overlay {
   position: absolute;
   z-index: 35;
-  left: 14px;
+  right: 16px;
   top: 70px;
   width: 300px;
   max-width: calc(100% - 28px);
@@ -2192,29 +2216,6 @@ button {
     0 16px 42px rgba(0, 0, 0, 0.34),
     0 0 0 1px rgba(240, 196, 108, 0.05);
   font-size: 11px;
-}
-
-.flow-debug-overlay.collapsed {
-  display: inline-flex;
-  width: auto;
-  padding: 6px;
-  gap: 6px;
-}
-
-.flow-debug-overlay.collapsed button {
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid #725f25;
-  border-radius: 6px;
-  color: #ffe0a0;
-  background: #17150d;
-  font-size: 10px;
-  font-weight: 900;
-}
-
-.flow-debug-overlay.collapsed button:hover {
-  border-color: #f0c46c;
-  color: #fff7df;
 }
 
 .flow-debug-title {
