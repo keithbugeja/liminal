@@ -2476,6 +2476,7 @@ button {
 }
 
 .runtime-filter button,
+.runtime-tail,
 .runtime-clear {
   height: 28px;
   padding: 0 9px;
@@ -2496,14 +2497,22 @@ button {
 }
 
 .runtime-filter button:disabled,
+.runtime-tail:disabled,
 .runtime-clear:disabled {
   cursor: not-allowed;
   color: #61716e;
 }
 
+.runtime-tail,
 .runtime-clear {
   border: 1px solid #263b40;
   border-radius: 7px;
+}
+
+.runtime-tail.active {
+  border-color: #2d6564;
+  color: #7beade;
+  background: #10201f;
 }
 
 .runtime-log-list {

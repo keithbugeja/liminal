@@ -3758,6 +3758,8 @@ function RuntimeConsole({
   onFilterChange: (filter: "all" | "selection") => void;
   onClear: () => void;
 }) {
+  const logListRef = useRef<HTMLDivElement | null>(null);
+  const [followLogs, setFollowLogs] = useState(true);
   const selectionTokens = runtimeSelectionTokens(selectedNode, selectedChannelName);
   const filteredLogs =
     filter === "selection" && selectionTokens.length > 0
@@ -3776,6 +3778,41 @@ function RuntimeConsole({
             ? "Error"
             : "Idle";
   const selectionLabel = selectedChannelName ?? selectedNode?.display_name ?? "No selection";
+
+  useEffect(() => {
+    if (!followLogs) {
+      return;
+    }
+
+    const logList = logListRef.current;
+    if (!logList) {
+      return;
+    }
+
+    logList.scrollTop = logList.scrollHeight;
+  }, [filteredLogs.length, filter, followLogs]);
+
+  const handleLogScroll = useCallback(() => {
+    const logList = logListRef.current;
+    if (!logList || !followLogs) {
+      return;
+    }
+
+    const distanceFromBottom = logList.scrollHeight - logList.scrollTop - logList.clientHeight;
+    if (distanceFromBottom > 16) {
+      setFollowLogs(false);
+    }
+  }, [followLogs]);
+
+  const resumeFollowingLogs = useCallback(() => {
+    setFollowLogs(true);
+    requestAnimationFrame(() => {
+      const logList = logListRef.current;
+      if (logList) {
+        logList.scrollTop = logList.scrollHeight;
+      }
+    });
+  }, []);
 
   return (
     <section className="runtime-console">
@@ -3802,12 +3839,20 @@ function RuntimeConsole({
               Selection
             </button>
           </div>
+          <button
+            className={followLogs ? "runtime-tail active" : "runtime-tail"}
+            onClick={followLogs ? () => setFollowLogs(false) : resumeFollowingLogs}
+            disabled={filteredLogs.length === 0}
+            title={followLogs ? "Stop following latest logs" : "Follow latest logs"}
+          >
+            Tail
+          </button>
           <button className="runtime-clear" onClick={onClear} disabled={logs.length === 0}>
             Clear
           </button>
         </div>
       </div>
-      <div className="runtime-log-list">
+      <div className="runtime-log-list" ref={logListRef} onScroll={handleLogScroll}>
         {filteredLogs.length === 0 ? (
           <p className="runtime-empty">
             {filter === "selection" && selectionTokens.length > 0
