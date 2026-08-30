@@ -3537,7 +3537,6 @@ function GraphCanvas({
   const previousConfigPath = useRef(configPath);
   const previousFitKey = useRef<string | null>(null);
   const flowAreaRef = useRef<HTMLDivElement | null>(null);
-  const missingPaintChecks = useRef(0);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
   const [nodePositions, setNodePositions] = useState<Record<string, LayoutPosition>>(savedLayout);
@@ -3786,34 +3785,6 @@ function GraphCanvas({
     const interval = window.setInterval(updateDebugSnapshot, 500);
     return () => window.clearInterval(interval);
   }, [updateDebugSnapshot]);
-
-  useEffect(() => {
-    const interval = window.setInterval(() => {
-      const flowArea = flowAreaRef.current;
-      if (!flowArea || flowNodes.length === 0 || reactFlow.getNodes().length === 0) {
-        missingPaintChecks.current = 0;
-        return;
-      }
-
-      const domNodes = flowArea.querySelectorAll(".react-flow__node").length;
-      const domMinimapNodes = flowArea.querySelectorAll(".react-flow__minimap-node").length;
-      const paintLayerMissing = domNodes === 0 || domMinimapNodes === 0;
-
-      if (!paintLayerMissing) {
-        missingPaintChecks.current = 0;
-        return;
-      }
-
-      missingPaintChecks.current += 1;
-      if (missingPaintChecks.current >= 2) {
-        missingPaintChecks.current = 0;
-        setFlowRevision((revision) => revision + 1);
-        previousFitKey.current = null;
-      }
-    }, 750);
-
-    return () => window.clearInterval(interval);
-  }, [flowNodes.length, reactFlow]);
 
   if (loadState === "error") {
     return (
