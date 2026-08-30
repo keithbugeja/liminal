@@ -4,6 +4,7 @@ import {
   Background,
   BaseEdge,
   Connection,
+  CoordinateExtent,
   Controls,
   Edge,
   EdgeChange,
@@ -3653,6 +3654,7 @@ function GraphCanvas({
       };
     });
   }, [channelByName, focusState, graph, onSelectEdge, runtimeActivity, selectedEdgeId]);
+  const graphExtent = useMemo(() => graphCoordinateExtent(flowNodes), [flowNodes]);
 
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<FlowNodeData>>[]) => {
@@ -3801,7 +3803,7 @@ function GraphCanvas({
             deletedEdges.forEach((edge) => {
               const channelName = (edge.data as ChannelEdgeData | undefined)?.channelName;
               if (edge.target && channelName) {
-            onDisconnectEdge(edge.target, channelName);
+                onDisconnectEdge(edge.target, channelName);
               }
             });
           }}
@@ -3831,6 +3833,10 @@ function GraphCanvas({
           nodesDraggable
           nodesConnectable
           elementsSelectable
+          translateExtent={graphExtent}
+          nodeExtent={graphExtent}
+          minZoom={0.25}
+          maxZoom={1.6}
         >
           <Background color="#243235" gap={24} size={1} />
           <MiniMap
@@ -5042,6 +5048,35 @@ function writeStoredNodePositions(
   );
 
   window.localStorage.setItem(layoutStorageKey(configPath), JSON.stringify(layout));
+}
+
+function graphCoordinateExtent(nodes: Node<FlowNodeData>[]): CoordinateExtent {
+  if (nodes.length === 0) {
+    return [
+      [-2000, -2000],
+      [4000, 4000],
+    ];
+  }
+
+  const margin = 900;
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+
+  nodes.forEach((node) => {
+    const width = 360;
+    const height = estimatedNodeHeight(node.data.graphNode);
+    minX = Math.min(minX, node.position.x);
+    minY = Math.min(minY, node.position.y);
+    maxX = Math.max(maxX, node.position.x + width);
+    maxY = Math.max(maxY, node.position.y + height);
+  });
+
+  return [
+    [Math.floor(minX - margin), Math.floor(minY - margin)],
+    [Math.ceil(maxX + margin), Math.ceil(maxY + margin)],
+  ];
 }
 
 function pruneStoredLayout(configPath: string, nodes: GraphNode[]) {

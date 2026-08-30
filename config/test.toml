@@ -29,4 +29,4 @@ output = "rule_data"
 
 [pipelines.default_pipeline.stages.rule.parameters ]
 error_strategy = "continue" 
-rules = [{ actions = [{ type = "pass_through" }], condition = { field_path = "value", operation = ">", value = 50 }, else_actions = [{ type = "drop_message" }] }]
+rules = [{ actions = [{ field_paths = [], type = "keep_only_fields" }, { field_path = "success", type = "set_field", value = true }], condition = { field_path = "value", operation = ">", value = 50 }, else_actions = [{ type = "drop_message" }] }]
