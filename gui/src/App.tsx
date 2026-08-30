@@ -12,7 +12,6 @@ import {
   getBezierPath,
   Handle,
   MarkerType,
-  MiniMap,
   Node,
   NodeChange,
   NodeProps,
@@ -216,7 +215,6 @@ type FlowDebugSnapshot = {
   renderedEdges: number;
   domNodes: number;
   domEdges: number;
-  domMinimapNodes: number;
   viewportTransform: string;
   viewportX: number;
   viewportY: number;
@@ -3544,7 +3542,6 @@ function GraphCanvas({
   const [debugExpanded, setDebugExpanded] = useState(false);
   const previousConfigPath = useRef(configPath);
   const previousFitKey = useRef<string | null>(null);
-  const settledGraphKey = useRef<string | null>(null);
   const flowAreaRef = useRef<HTMLDivElement | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
@@ -3679,9 +3676,6 @@ function GraphCanvas({
       };
     });
   }, [channelByName, focusState, graph, onSelectEdge, runtimeActivity, selectedEdgeId]);
-  const graphSignature = graph
-    ? `${configPath}:${graph.nodes.map((node) => node.id).join("|")}:${graph.edges.map((edge) => edge.id).join("|")}`
-    : `${configPath}:empty`;
   const flowKey = `${configPath}:${flowRevision}`;
   const updateDebugSnapshot = useCallback(() => {
     const viewport = reactFlow.getViewport();
@@ -3689,7 +3683,6 @@ function GraphCanvas({
     const viewportElement = flowArea?.querySelector<HTMLElement>(".react-flow__viewport") ?? null;
     const domNodes = flowArea?.querySelectorAll(".react-flow__node").length ?? 0;
     const domEdges = flowArea?.querySelectorAll(".react-flow__edge").length ?? 0;
-    const domMinimapNodes = flowArea?.querySelectorAll(".react-flow__minimap-node").length ?? 0;
 
     setDebugSnapshot({
       appNodes: flowNodes.length,
@@ -3698,7 +3691,6 @@ function GraphCanvas({
       renderedEdges: reactFlow.getEdges().length,
       domNodes,
       domEdges,
-      domMinimapNodes,
       viewportTransform: viewportElement?.style.transform || "none",
       viewportX: Math.round(viewport.x),
       viewportY: Math.round(viewport.y),
@@ -3769,24 +3761,6 @@ function GraphCanvas({
     previousFitKey.current = null;
     setFlowRevision((revision) => revision + 1);
   }, [graph]);
-
-  useEffect(() => {
-    if (!graph || flowNodes.length === 0 || settledGraphKey.current === graphSignature) {
-      return;
-    }
-
-    settledGraphKey.current = graphSignature;
-    const settleTimer = window.setTimeout(() => {
-      setFlowRevision((revision) => revision + 1);
-      previousFitKey.current = null;
-      window.setTimeout(() => {
-        reactFlow.fitView({ padding: 0.18, duration: 180 });
-        window.setTimeout(updateDebugSnapshot, 220);
-      }, 80);
-    }, 650);
-
-    return () => window.clearTimeout(settleTimer);
-  }, [flowNodes.length, graph, graphSignature, reactFlow, updateDebugSnapshot]);
 
   useEffect(() => {
     if (!graph || flowNodes.length === 0) {
@@ -3923,21 +3897,6 @@ function GraphCanvas({
           elementsSelectable
         >
           <Background color="#243235" gap={24} size={1} />
-          <MiniMap
-            className="liminal-minimap"
-            pannable
-            zoomable
-            bgColor="rgba(8, 13, 15, 0.94)"
-            maskColor="rgba(103, 229, 216, 0.07)"
-            nodeStrokeColor="#152326"
-            nodeBorderRadius={2}
-            nodeColor={(node) => {
-              const graphNode = (node.data as FlowNodeData).graphNode;
-              if (graphNode.kind === "input") return "#4db7a7";
-              if (graphNode.kind === "output") return "#d7a84d";
-              return "#7d9cff";
-            }}
-          />
           <Controls showInteractive={false} />
         </ReactFlow>
       </div>
@@ -4011,10 +3970,6 @@ function FlowDebugOverlay({
         <div>
           <dt>DOM edges</dt>
           <dd>{snapshot?.domEdges ?? "-"}</dd>
-        </div>
-        <div>
-          <dt>Mini nodes</dt>
-          <dd>{snapshot?.domMinimapNodes ?? "-"}</dd>
         </div>
         <div>
           <dt>Viewport</dt>
