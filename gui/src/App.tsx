@@ -1,8 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  applyEdgeChanges,
-  applyNodeChanges,
   Background,
   BaseEdge,
   Connection,
@@ -3525,6 +3523,7 @@ function GraphCanvas({
   const previousFitKey = useRef<string | null>(null);
   const reactFlow = useReactFlow<Node<FlowNodeData>, Edge>();
   const savedLayout = useMemo(() => readStoredLayout(configPath), [configPath, layoutRevision]);
+  const [nodePositions, setNodePositions] = useState<Record<string, LayoutPosition>>(savedLayout);
   const diagnosticsByNode = useMemo(() => diagnosticsByNodeId(graph), [graph]);
   const diagnosticsByChannel = useMemo(() => diagnosticCountByChannelName(graph), [graph]);
   const focusState = useMemo(
@@ -3543,7 +3542,7 @@ function GraphCanvas({
 
   const flowNodes = useMemo<Node<FlowNodeData>[]>(() => {
     const query = filterText.trim().toLowerCase();
-    const positions = layoutNodePositions(graph?.nodes ?? [], savedLayout);
+    const positions = layoutNodePositions(graph?.nodes ?? [], { ...savedLayout, ...nodePositions });
 
     return (graph?.nodes ?? []).map((node) => {
       const channels = [...node.input_channels, node.output_channel ?? ""]
@@ -3605,6 +3604,7 @@ function GraphCanvas({
     graph,
     connectionSourceNodeId,
     onSelectChannel,
+    nodePositions,
     runtimeActivity,
     savedLayout,
     selectedChannelName,
@@ -3654,29 +3654,33 @@ function GraphCanvas({
     });
   }, [channelByName, focusState, graph, onSelectEdge, runtimeActivity, selectedEdgeId]);
 
-  const [nodes, setNodes] = useState<Node<FlowNodeData>[]>(flowNodes);
-  const [edges, setEdges] = useState<Edge[]>(flowEdges);
   const onNodesChange = useCallback(
     (changes: NodeChange<Node<FlowNodeData>>[]) => {
       const removeChanges = changes.filter((change) => change.type === "remove");
-      const localChanges = changes.filter((change) => change.type !== "remove");
+      const positionChanges = changes.filter((change) => change.type === "position" && change.position);
 
       removeChanges.forEach((change) => {
         onDeleteNode(change.id);
       });
 
-      if (localChanges.length > 0) {
-        setNodes((currentNodes) => applyNodeChanges<Node<FlowNodeData>>(localChanges, currentNodes));
+      if (positionChanges.length > 0) {
+        setNodePositions((currentPositions) => {
+          const nextPositions = { ...currentPositions };
+          positionChanges.forEach((change) => {
+            if (change.type === "position" && change.position) {
+              nextPositions[change.id] = {
+                x: Math.round(change.position.x),
+                y: Math.round(change.position.y),
+              };
+            }
+          });
+          return nextPositions;
+        });
       }
     },
     [onDeleteNode],
   );
-  const onEdgesChange = useCallback(
-    (changes: EdgeChange[]) => {
-      setEdges((currentEdges) => applyEdgeChanges(changes, currentEdges));
-    },
-    [],
-  );
+  const onEdgesChange = useCallback((_changes: EdgeChange[]) => {}, []);
   const onConnect = useCallback(
     (connection: Connection) => {
       if (!connection.source || !connection.target) {
@@ -3695,23 +3699,11 @@ function GraphCanvas({
   );
 
   useEffect(() => {
-    if (!graph || flowNodes.length === 0) {
-      return;
+    if (previousConfigPath.current !== configPath) {
+      previousConfigPath.current = configPath;
+      setNodePositions(savedLayout);
     }
-
-    setNodes((currentNodes) => {
-      if (previousConfigPath.current !== configPath) {
-        previousConfigPath.current = configPath;
-        return flowNodes;
-      }
-
-      return mergeFlowNodeMetadata(currentNodes, flowNodes);
-    });
-  }, [configPath, flowNodes, graph, setNodes]);
-
-  useEffect(() => {
-    setEdges(flowEdges);
-  }, [flowEdges, setEdges]);
+  }, [configPath, savedLayout]);
 
   useEffect(() => {
     if (!graph || flowNodes.length === 0) {
@@ -3772,8 +3764,11 @@ function GraphCanvas({
         <button
           onClick={() => {
             clearStoredLayout(configPath);
-            setNodes(automaticFlowNodes(flowNodes, graph.nodes));
+            setNodePositions({});
             setLayoutRevision((revision) => revision + 1);
+            window.requestAnimationFrame(() => {
+              reactFlow.fitView({ padding: 0.18, duration: 180 });
+            });
           }}
           title="Reset node layout"
           aria-label="Reset node layout"
@@ -3792,8 +3787,8 @@ function GraphCanvas({
       />
       <div className="flow-area">
         <ReactFlow
-          nodes={nodes}
-          edges={edges}
+          nodes={flowNodes}
+          edges={flowEdges}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
           onNodesChange={onNodesChange}
@@ -3806,15 +3801,21 @@ function GraphCanvas({
             deletedEdges.forEach((edge) => {
               const channelName = (edge.data as ChannelEdgeData | undefined)?.channelName;
               if (edge.target && channelName) {
-                onDisconnectEdge(edge.target, channelName);
+            onDisconnectEdge(edge.target, channelName);
               }
             });
           }}
           onNodeDragStop={(_, node) => {
-            setNodes((currentNodes) => {
-              const nextNodes = mergeDraggedNode(currentNodes, node);
-              writeStoredNodePositions(configPath, nextNodes);
-              return nextNodes;
+            setNodePositions((currentPositions) => {
+              const nextPositions = {
+                ...currentPositions,
+                [node.id]: {
+                  x: Math.round(node.position.x),
+                  y: Math.round(node.position.y),
+                },
+              };
+              writeStoredNodePositions(configPath, flowNodes, nextPositions);
+              return nextPositions;
             });
             setLayoutRevision((revision) => revision + 1);
           }}
@@ -4065,29 +4066,6 @@ function channelBezierPath(
   const controlTargetY = targetY - laneOffset;
 
   return `M ${sourceX},${sourceY} C ${controlSourceX},${controlSourceY} ${controlTargetX},${controlTargetY} ${targetX},${targetY}`;
-}
-
-function mergeDraggedNode(nodes: Node<FlowNodeData>[], draggedNode: Node<FlowNodeData>) {
-  return nodes.map((node) => (node.id === draggedNode.id ? draggedNode : node));
-}
-
-function mergeFlowNodeMetadata(
-  currentNodes: Node<FlowNodeData>[],
-  nextNodes: Node<FlowNodeData>[],
-) {
-  return nextNodes.map((nextNode) => {
-    const currentNode = currentNodes.find((node) => node.id === nextNode.id);
-    return currentNode ? { ...nextNode, position: currentNode.position } : nextNode;
-  });
-}
-
-function automaticFlowNodes(nextNodes: Node<FlowNodeData>[], graphNodes: GraphNode[]) {
-  const automaticPositions = layoutNodePositions(graphNodes, {});
-
-  return nextNodes.map((node) => ({
-    ...node,
-    position: automaticPositions.get(node.id) ?? node.position,
-  }));
 }
 
 function channelClassName(
@@ -5048,13 +5026,17 @@ function readStoredLayout(configPath: string): Record<string, LayoutPosition> {
   }
 }
 
-function writeStoredNodePositions(configPath: string, nodes: Node<FlowNodeData>[]) {
+function writeStoredNodePositions(
+  configPath: string,
+  nodes: Node<FlowNodeData>[],
+  positions: Record<string, LayoutPosition>,
+) {
   const layout = Object.fromEntries(
     nodes.map((node) => [
       node.id,
       {
-        x: Math.round(node.position.x),
-        y: Math.round(node.position.y),
+        x: Math.round(positions[node.id]?.x ?? node.position.x),
+        y: Math.round(positions[node.id]?.y ?? node.position.y),
       },
     ]),
   );
