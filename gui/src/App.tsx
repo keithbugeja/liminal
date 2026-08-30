@@ -3111,7 +3111,7 @@ function RuleFieldEditor({
       value={formatJsonValue(value)}
       issue={issue}
       onChange={(nextValue) =>
-        onChange(field.kind === "json_value" ? parseJsonLikeValue(nextValue) : nextValue)
+        onChange(["array", "object", "json_value"].includes(field.kind) ? parseJsonLikeValue(nextValue) : nextValue)
       }
     />
   );
@@ -5044,6 +5044,7 @@ function validateRuleActions(
     variant.fields.forEach((field) => {
       const value = actionObject[field.key];
       if (!field.required || !isEmptyRequiredValue(value)) {
+        validateRuleFieldValue(value, field, `${actionPath}.${field.key}`, `${label} ${actionIndex + 1}`, issues);
         return;
       }
 
@@ -5075,6 +5076,43 @@ function validateRuleActions(
       });
     }
   });
+}
+
+function validateRuleFieldValue(
+  value: JsonValue | undefined,
+  field: FieldSpec,
+  path: string,
+  label: string,
+  issues: ValidationIssue[],
+) {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  if (field.kind === "array" && !Array.isArray(value)) {
+    issues.push({
+      path,
+      message: `${label}: ${field.label.toLowerCase()} must be an array.`,
+    });
+    return;
+  }
+
+  if (field.kind === "object" && !isJsonObject(value)) {
+    issues.push({
+      path,
+      message: `${label}: ${field.label.toLowerCase()} must be an object.`,
+    });
+  }
+
+  if (field.key === "field_paths" && Array.isArray(value)) {
+    const hasInvalidPath = value.some((item) => typeof item !== "string" || item.trim().length === 0);
+    if (hasInvalidPath) {
+      issues.push({
+        path,
+        message: `${label}: field paths must be non-empty strings.`,
+      });
+    }
+  }
 }
 
 function isEmptyRequiredValue(value: JsonValue | undefined) {

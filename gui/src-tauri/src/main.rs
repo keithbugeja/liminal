@@ -2182,6 +2182,33 @@ description = "Rules"
     }
 
     #[test]
+    fn popcorn_example_processors_are_constructible() {
+        let config = load_config(Path::new("../../config/examples/config_popcorn.toml"))
+            .expect("popcorn example loads");
+
+        for (name, stage) in &config.inputs {
+            create_processor(&stage.r#type, stage.clone())
+                .unwrap_or_else(|error| panic!("input '{}' can be built: {}", name, error));
+        }
+
+        for (pipeline_name, pipeline) in &config.pipelines {
+            for (stage_name, stage) in &pipeline.stages {
+                create_processor(&stage.r#type, stage.clone()).unwrap_or_else(|error| {
+                    panic!(
+                        "pipeline stage '{}.{}' can be built: {}",
+                        pipeline_name, stage_name, error
+                    )
+                });
+            }
+        }
+
+        for (name, stage) in &config.outputs {
+            create_processor(&stage.r#type, stage.clone())
+                .unwrap_or_else(|error| panic!("output '{}' can be built: {}", name, error));
+        }
+    }
+
+    #[test]
     fn rejects_duplicate_added_node() {
         let mut document = parse_document(
             r#"

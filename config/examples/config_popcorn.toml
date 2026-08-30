@@ -1,0 +1,46 @@
+[inputs]
+
+[inputs.factory_entropy]
+type = "simulated"
+output = "factory_entropy_data"
+parameters = { interval_ms = 500, distribution = "uniform", min_value = 0.0, max_value = 100.0 , field_out = "chaos_factor" }
+
+[outputs]
+
+[outputs.console]
+type = "console"
+inputs = ["detector_data"]
+
+[pipelines]
+
+[pipelines.process_control]
+description = "process_control pipeline"
+
+[pipelines.process_control.stages]
+
+[pipelines.process_control.stages.physics]
+type = "rule"
+inputs = ["factory_entropy_data"]
+output = "physics_data"
+
+[pipelines.process_control.stages.physics.parameters ]
+rules = [{ actions = [{ expression = "chaos_factor % 2", field_path = "chaos_factor_mod_2", type = "compute_field" }], condition = { field_path = "chaos_factor", operation = ">=", value = 0 }, else_actions = [{ expression = "chaos_factor % 2", field_path = "chaos_factor_mod_2", type = "compute_field" }] }, { actions = [{ field_path = "is_bonding", type = "set_field", value = 0 }, { field_path = "chaos_factor_mod_2", type = "set_field", value = 0 }], condition = { field_path = "chaos_factor_mod_2", operation = "<", value = 0.5 }, else_actions = [{ field_path = "chaos_factor_mod_2", type = "set_field", value = 1 }] }, { actions = [{ expression = "(chaos_factor % 5) / 10.0", field_path = "sensor_noise", type = "compute_field" }], condition = { field_path = "chaos_factor", operation = "not_equals", value = -1 }, else_actions = [] }, { actions = [{ expression = "45.0 + sensor_noise", field_path = "humidity_calc", type = "compute_field" }], condition = { field_path = "chaos_factor", operation = "not_equals", value = -1 }, else_actions = [] }, { actions = [{ expression = "25 +sensor_noise", field_path = "humidity_calc", type = "compute_field" }, { field_path = "event_log", type = "set_field", value = "WARN: SERVICE_DOOR_OPEN" }], condition = { field_path = "chaos_factor", operation = ">", value = 85 }, else_actions = [] }]
+error_strategy = "continue" 
+
+[pipelines.process_control.stages.context]
+type = "rule"
+inputs = ["physics_data"]
+output = "context_data"
+
+[pipelines.process_control.stages.context.parameters ]
+rules = [{ actions = [{ field_path = "phase", type = "set_field", value = "WIRE_BONDING" }], condition = { field_path = "chaos_factor_mod_2", operation = "equals", value = 0 }, else_actions = [{ field_path = "phase", type = "set_field", value = "SETUP_LEADFRAME" }] }]
+error_strategy = "continue" 
+
+[pipelines.process_control.stages.detector]
+type = "rule"
+inputs = ["context_data"]
+output = "detector_data"
+
+[pipelines.process_control.stages.detector.parameters ]
+rules = [{ actions = [{ field_path = "env_status", type = "set_field", value = "EXCURSION" }], condition = { field_path = "humidity_calc", operation = ">", value = 60 }, else_actions = [] }, { actions = [{ field_path = "env_status", type = "set_field", value = "SAFE_MODE_IGNORE" }], condition = { field_path = "phase", operation = "equals", value = "WIRE_BONDING" }, else_actions = [] }, { actions = [{ field_path = "ALERT", type = "set_field", value = "CRITICAL: MOISTURE ABSORPTION RISK" }, { field_paths = ["ALERT", "phase", "env_status"], type = "keep_only_fields" }], condition = { field_path = "env_status", operation = "equals", value = "EXCURSION" }, else_actions = [] }]
+error_strategy = "continue" 
