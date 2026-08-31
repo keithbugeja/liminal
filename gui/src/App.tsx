@@ -169,6 +169,7 @@ type GraphDiagnostic = {
 type ProcessorCategory = "input" | "transform" | "aggregator" | "output";
 type JsonValue = null | string | number | boolean | JsonValue[] | { [key: string]: JsonValue };
 type FieldKind = "string" | "integer" | "number" | "boolean" | "enum" | "array" | "object" | "json_value";
+type FieldStatus = "stable" | "experimental" | "reserved";
 
 type SchemaSpec =
   | { kind: "object"; fields: FieldSpec[] }
@@ -192,6 +193,8 @@ type FieldSpec = {
   help: string;
   schema: SchemaSpec | null;
   renderer: string | null;
+  status: FieldStatus;
+  status_note: string | null;
 };
 
 type ProcessorDescriptor = {
@@ -2366,6 +2369,9 @@ function NodeInspector({
             value={node.concurrency_type}
             valueKind="enum"
             options={["thread", "pipeline", "owner"]}
+            status={node.concurrency_type === "thread" ? "stable" : "reserved"}
+            help="Only thread execution is currently implemented; pipeline and owner are reserved."
+            statusNote="Pipeline and owner modes are preserved in config but currently run with thread semantics."
             saveState={saveState}
             onSave={(value) => onUpdateField(node.id, "concurrency.type", value)}
           />
@@ -2378,6 +2384,8 @@ function NodeInspector({
             label="timing.event_time_field"
             value={timingValue(node, "event_time_field", "")}
             valueKind="string"
+            status="experimental"
+            statusNote="RFC3339 strings with Z or timezone offsets are supported; missing or unparsable values fall back to system time."
             saveState={saveState}
             onSave={(value) => onUpdateField(node.id, "timing.event_time_field", value)}
           />
@@ -2406,6 +2414,8 @@ function NodeInspector({
             label="timing.metrics_enabled"
             value={timingValue(node, "metrics_enabled", "true")}
             valueKind="boolean"
+            status="reserved"
+            statusNote="Metrics flags are preserved for Phase 10 runtime events; no metrics collector consumes this yet."
             saveState={saveState}
             onSave={(value) => onUpdateField(node.id, "timing.metrics_enabled", value)}
           />
@@ -2415,6 +2425,10 @@ function NodeInspector({
                 <strong>timing.watermark_strategy</strong>
                 <span>object</span>
               </div>
+              <FieldStatusBadge
+                status="experimental"
+                note="Watermark config is parsed, but global runtime watermark coordination is deferred."
+              />
               <pre>configured</pre>
             </div>
           )}
@@ -2479,6 +2493,8 @@ function ParameterRow({
   const fieldKind = editableKindForParameter(parameter, fieldSpec);
   const valueKind = fieldSpec?.kind ?? parameter.value_kind;
   const options = fieldSpec ? selectOptionsForValue(fieldSpec, draftValue) : [];
+  const status = fieldSpec?.status ?? "stable";
+  const statusNote = fieldSpec?.status_note ?? null;
 
   useEffect(() => {
     setDraftValue(parameter.value);
@@ -2497,6 +2513,7 @@ function ParameterRow({
           <strong title={parameter.key}>{label}</strong>
           <span>{valueKind}</span>
         </div>
+        <FieldStatusBadge status={status} note={statusNote} />
         {fieldSpec?.help && <p className="parameter-help">{fieldSpec.help}</p>}
         {fieldSpec?.renderer === "rule_builder" && fieldSpec.schema ? (
           <RuleParameterEditor
@@ -2530,6 +2547,7 @@ function ParameterRow({
         <strong title={parameter.key}>{label}</strong>
         <span>{valueKind}</span>
       </div>
+      <FieldStatusBadge status={status} note={statusNote} />
       {fieldSpec?.help && <p className="parameter-help">{fieldSpec.help}</p>}
       {fieldKind === "enum" ? (
         <select value={draftValue} onChange={(event) => setDraftValue(event.target.value)}>
@@ -2584,6 +2602,7 @@ function MissingParameterRow({
           <strong title={field.key}>{field.label}</strong>
           <span>{field.kind}</span>
         </div>
+        <FieldStatusBadge status={field.status} note={field.status_note} />
         {field.help && <p className="parameter-help">{field.help}</p>}
         <RuleParameterEditor
           nodeId={nodeId}
@@ -2604,6 +2623,7 @@ function MissingParameterRow({
           <strong title={field.key}>{field.label}</strong>
           <span>{field.kind}</span>
         </div>
+        <FieldStatusBadge status={field.status} note={field.status_note} />
         {field.help && <p className="parameter-help">{field.help}</p>}
         <StringArrayParameterEditor
           nodeId={nodeId}
@@ -2624,6 +2644,7 @@ function MissingParameterRow({
         <strong title={field.key}>{field.label}</strong>
         <span>{field.kind}</span>
       </div>
+      <FieldStatusBadge status={field.status} note={field.status_note} />
       {field.help && <p className="parameter-help">{field.help}</p>}
       <div className="parameter-default">
         <span>{field.required ? "required" : "default"}</span>
@@ -2999,6 +3020,8 @@ function RuleActionCard({
       help: "",
       schema: null,
       renderer: null,
+      status: "stable" as FieldStatus,
+      status_note: null,
     }));
 
   return (
@@ -3309,6 +3332,9 @@ function EditableFieldRow({
   value,
   valueKind,
   options,
+  help,
+  status = "stable",
+  statusNote = null,
   saveState,
   onSave,
 }: {
@@ -3316,6 +3342,9 @@ function EditableFieldRow({
   value: string;
   valueKind: "string" | "number" | "enum" | "boolean";
   options?: string[];
+  help?: string;
+  status?: FieldStatus;
+  statusNote?: string | null;
   saveState: SaveState;
   onSave: (value: string) => Promise<void>;
 }) {
@@ -3332,6 +3361,8 @@ function EditableFieldRow({
         <strong>{label}</strong>
         <span>{valueKind}</span>
       </div>
+      <FieldStatusBadge status={status} note={statusNote} />
+      {help && <p className="parameter-help">{help}</p>}
       {valueKind === "enum" ? (
         <select value={draftValue} onChange={(event) => setDraftValue(event.target.value)}>
           {(options ?? []).map((option) => (
@@ -3363,6 +3394,19 @@ function EditableFieldRow({
       >
         {saveState === "saving" ? "Saving" : "Save"}
       </button>
+    </div>
+  );
+}
+
+function FieldStatusBadge({ status, note }: { status: FieldStatus; note?: string | null }) {
+  if (status === "stable") {
+    return null;
+  }
+
+  return (
+    <div className={`field-status ${status}`} title={note ?? undefined}>
+      <span>{status}</span>
+      {note && <p>{note}</p>}
     </div>
   );
 }

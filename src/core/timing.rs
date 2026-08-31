@@ -201,10 +201,10 @@ impl TimingHelpers {
     }
 
     /// Parse ISO 8601 timestamp string
-    pub fn parse_iso_timestamp(_timestamp_str: &str) -> Option<SystemTime> {
-        // Basic ISO 8601 parsing - could be enhanced with chrono crate
-        // For now, just handle simple cases
-        None // TODO: Implement proper ISO 8601 parsing
+    pub fn parse_iso_timestamp(timestamp_str: &str) -> Option<SystemTime> {
+        chrono::DateTime::parse_from_rfc3339(timestamp_str)
+            .ok()
+            .map(SystemTime::from)
     }
 
     /// Create a message with timing information propagated from source
@@ -354,5 +354,46 @@ mod tests {
         std::thread::sleep(Duration::from_millis(110));
         let watermark = manager.update_watermark(&msg);
         assert!(watermark.is_some());
+    }
+
+    #[test]
+    fn parses_rfc3339_timestamp_with_z() {
+        let parsed = TimingHelpers::parse_iso_timestamp("2026-08-30T10:41:07.393324Z")
+            .expect("timestamp parses");
+        let millis = parsed
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("timestamp after epoch")
+            .as_millis();
+
+        assert_eq!(millis, 1_788_086_467_393);
+    }
+
+    #[test]
+    fn parses_rfc3339_timestamp_with_offset() {
+        let zulu =
+            TimingHelpers::parse_iso_timestamp("2026-08-30T10:41:07Z").expect("z timestamp parses");
+        let offset = TimingHelpers::parse_iso_timestamp("2026-08-30T12:41:07+02:00")
+            .expect("offset timestamp parses");
+
+        assert_eq!(zulu, offset);
+    }
+
+    #[test]
+    fn rejects_invalid_iso_timestamp() {
+        assert!(TimingHelpers::parse_iso_timestamp("not a timestamp").is_none());
+    }
+
+    #[test]
+    fn extracts_string_event_time_from_payload() {
+        let event_time = TimingHelpers::extract_timestamp_field(
+            &json!({ "timestamp": "2026-08-30T10:41:07Z" }),
+            "timestamp",
+        )
+        .expect("timestamp extracts");
+
+        assert_eq!(
+            event_time,
+            TimingHelpers::parse_iso_timestamp("2026-08-30T10:41:07Z").unwrap()
+        );
     }
 }

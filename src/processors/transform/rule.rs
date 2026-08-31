@@ -678,6 +678,14 @@ impl Processor for RuleProcessor {
             select! {
                 message = input.recv() => {
                     if let Some(message) = message {
+                        if self.timing.should_drop_message(&message) {
+                            tracing::debug!(
+                                "Message from '{}' was dropped by timing constraints",
+                                channel_name
+                            );
+                            continue;
+                        }
+
                         match self.process_message(message) {
                             Ok(Some(transformed_message)) => {
                                 if let Some(output_info) = &context.output {

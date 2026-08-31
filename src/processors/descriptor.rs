@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::processors::common::tcp::DEFAULT_MAX_FRAME_BYTES_STR;
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ProcessorCategory {
@@ -20,6 +22,15 @@ pub enum FieldKind {
     Array,
     Object,
     JsonValue,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FieldStatus {
+    #[default]
+    Stable,
+    Experimental,
+    Reserved,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -56,6 +67,8 @@ pub struct FieldSpec {
     pub help: String,
     pub schema: Option<SchemaSpec>,
     pub renderer: Option<String>,
+    pub status: FieldStatus,
+    pub status_note: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -410,7 +423,19 @@ fn field(
         help: help.to_string(),
         schema: None,
         renderer: None,
+        status: FieldStatus::Stable,
+        status_note: None,
     }
+}
+
+fn field_with_status(
+    mut field: FieldSpec,
+    status: FieldStatus,
+    status_note: &'static str,
+) -> FieldSpec {
+    field.status = status;
+    field.status_note = Some(status_note.to_string());
+    field
 }
 
 fn field_with_schema(
@@ -442,14 +467,18 @@ fn rule_fields() -> Vec<FieldSpec> {
             },
             Some("rule_builder"),
         ),
-        field(
-            "error_strategy",
-            "Error strategy",
-            FieldKind::Enum,
-            false,
-            Some("continue"),
-            &["continue", "skip", "abort", "use_default"],
-            "Behavior when a rule action fails.",
+        field_with_status(
+            field(
+                "error_strategy",
+                "Error strategy",
+                FieldKind::Enum,
+                false,
+                Some("continue"),
+                &["continue", "skip", "abort", "use_default"],
+                "Behavior when a rule action fails.",
+            ),
+            FieldStatus::Experimental,
+            "Rule error strategy semantics are being clarified in audit Pass 7.",
         ),
     ]
 }
@@ -739,7 +768,7 @@ fn tcp_fields() -> Vec<FieldSpec> {
             false,
             Some("client"),
             &["client", "server"],
-            "TCP connection mode.",
+            "TCP connection mode. Server mode accepts one client connection at a time.",
         ),
         field(
             "host",
@@ -776,6 +805,15 @@ fn tcp_fields() -> Vec<FieldSpec> {
             Some("5000"),
             &[],
             "Delay between reconnect attempts in milliseconds.",
+        ),
+        field(
+            "max_frame_bytes",
+            "Max frame bytes",
+            FieldKind::Integer,
+            false,
+            Some(DEFAULT_MAX_FRAME_BYTES_STR),
+            &[],
+            "Maximum accepted length-prefixed TCP frame size in bytes.",
         ),
     ]
 }
@@ -827,7 +865,10 @@ mod tests {
 
         assert_eq!(rules.kind, FieldKind::Array);
         assert!(rules.required);
+        assert_eq!(rules.status, FieldStatus::Stable);
         assert_eq!(error_strategy.kind, FieldKind::Enum);
+        assert_eq!(error_strategy.status, FieldStatus::Experimental);
+        assert!(error_strategy.status_note.is_some());
         assert_eq!(
             error_strategy.options,
             vec!["continue", "skip", "abort", "use_default"]
@@ -949,5 +990,28 @@ mod tests {
         );
         assert_eq!(fusion.fields[1].default_value.as_deref(), Some("prefix"));
         assert_eq!(fusion.fields[2].default_value.as_deref(), Some("25"));
+    }
+
+    #[test]
+    fn tcp_descriptors_expose_max_frame_default() {
+        let descriptors = processor_descriptors();
+
+        for type_name in ["tcp_input", "tcp_output"] {
+            let descriptor = descriptors
+                .iter()
+                .find(|descriptor| descriptor.type_name == type_name)
+                .expect("tcp descriptor exists");
+            let max_frame = descriptor
+                .fields
+                .iter()
+                .find(|field| field.key == "max_frame_bytes")
+                .expect("max_frame_bytes field exists");
+
+            assert_eq!(max_frame.kind, FieldKind::Integer);
+            assert_eq!(
+                max_frame.default_value.as_deref(),
+                Some(DEFAULT_MAX_FRAME_BYTES_STR)
+            );
+        }
     }
 }

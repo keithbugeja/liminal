@@ -1443,6 +1443,45 @@ button {
   line-height: 1.35;
 }
 
+.field-status {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 3px;
+  padding: 7px 8px;
+  border-radius: 6px;
+  background: rgba(20, 28, 30, 0.58);
+}
+
+.field-status span {
+  color: #d9c174;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.field-status p {
+  margin: 0;
+  color: #9aacaa;
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.field-status.reserved {
+  background: rgba(44, 34, 22, 0.55);
+}
+
+.field-status.reserved span {
+  color: #f1c66d;
+}
+
+.field-status.experimental {
+  background: rgba(23, 38, 42, 0.58);
+}
+
+.field-status.experimental span {
+  color: #84dcd5;
+}
+
 .parameter-row input[type="text"],
 .parameter-row input[type="number"],
 .parameter-row select {

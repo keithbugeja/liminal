@@ -4,11 +4,15 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, timeout};
 
+pub const DEFAULT_MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const DEFAULT_MAX_FRAME_BYTES_STR: &str = "1048576";
+
 #[derive(Debug, Clone)]
 pub struct TcpConfig {
     pub mode: TcpMode,
     pub reconnect: bool,
     pub reconnect_interval_ms: u64,
+    pub max_frame_bytes: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -44,15 +48,31 @@ impl TcpConfig {
         let reconnect: bool = extract_param(&config.parameters, "reconnect", true);
         let reconnect_interval_ms: u64 =
             extract_param(&config.parameters, "reconnect_interval_ms", 5000);
+        let max_frame_bytes: usize = extract_param(
+            &config.parameters,
+            "max_frame_bytes",
+            DEFAULT_MAX_FRAME_BYTES,
+        );
 
         Ok(Self {
             mode,
             reconnect,
             reconnect_interval_ms,
+            max_frame_bytes,
         })
     }
 
     pub fn validate(&self) -> anyhow::Result<()> {
+        if self.max_frame_bytes == 0 {
+            return Err(anyhow!("TCP max_frame_bytes must be greater than 0"));
+        }
+        if self.max_frame_bytes > u32::MAX as usize {
+            return Err(anyhow!(
+                "TCP max_frame_bytes cannot exceed {} bytes",
+                u32::MAX
+            ));
+        }
+
         match &self.mode {
             TcpMode::Client { host, port } | TcpMode::Server { host, port } => {
                 if host.is_empty() {
@@ -84,6 +104,15 @@ impl TcpConnection {
 
     pub fn is_connected(&self) -> bool {
         self.stream.is_some()
+    }
+
+    #[cfg(test)]
+    fn with_stream(name: String, config: TcpConfig, stream: TcpStream) -> Self {
+        Self {
+            name,
+            config,
+            stream: Some(stream),
+        }
     }
 
     async fn connect_client(&mut self) -> anyhow::Result<()> {
@@ -172,6 +201,15 @@ impl TcpConnection {
     }
 
     pub async fn send_message_with_length_prefix(&mut self, message: &[u8]) -> anyhow::Result<()> {
+        if message.len() > self.config.max_frame_bytes {
+            return Err(anyhow!(
+                "{}: TCP frame is {} bytes, exceeding max_frame_bytes {}",
+                self.name,
+                message.len(),
+                self.config.max_frame_bytes
+            ));
+        }
+
         if let Some(ref mut stream) = self.stream {
             // Send 4-byte length prefix (big-endian)
             let length = message.len() as u32;
@@ -200,6 +238,15 @@ impl TcpConnection {
                 message_length
             );
 
+            if message_length > self.config.max_frame_bytes {
+                return Err(anyhow!(
+                    "{}: TCP frame is {} bytes, exceeding max_frame_bytes {}",
+                    self.name,
+                    message_length,
+                    self.config.max_frame_bytes
+                ));
+            }
+
             // Read the actual message
             let mut message_buf = vec![0u8; message_length];
             stream.read_exact(&mut message_buf).await?;
@@ -216,5 +263,104 @@ impl TcpConnection {
 
     pub fn reconnect_interval(&self) -> u64 {
         self.config.reconnect_interval_ms
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::StageConfig;
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn test_config(max_frame_bytes: usize) -> TcpConfig {
+        TcpConfig {
+            mode: TcpMode::Server {
+                host: "127.0.0.1".to_string(),
+                port: 1,
+            },
+            reconnect: false,
+            reconnect_interval_ms: 100,
+            max_frame_bytes,
+        }
+    }
+
+    async fn socket_pair() -> anyhow::Result<(TcpStream, TcpStream)> {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let client = TcpStream::connect(addr).await?;
+        let (server, _) = listener.accept().await?;
+        Ok((client, server))
+    }
+
+    #[test]
+    fn rejects_zero_max_frame_config() {
+        let mut params = HashMap::new();
+        params.insert("max_frame_bytes".to_string(), json!(0));
+
+        let stage_config = StageConfig {
+            r#type: "tcp_input".to_string(),
+            inputs: None,
+            output: Some("raw".to_string()),
+            concurrency: None,
+            channel: None,
+            timing: None,
+            parameters: Some(params),
+        };
+
+        let config = TcpConfig::from_stage_config(&stage_config).expect("config parses");
+        let error = config.validate().expect_err("zero frame limit is invalid");
+        assert!(error.to_string().contains("max_frame_bytes"));
+    }
+
+    #[tokio::test]
+    async fn receives_frame_below_limit() {
+        let (mut client, server) = socket_pair().await.expect("socket pair opens");
+        let mut connection =
+            TcpConnection::with_stream("test".to_string(), test_config(16), server);
+
+        client
+            .write_all(&(5_u32.to_be_bytes()))
+            .await
+            .expect("length writes");
+        client.write_all(b"hello").await.expect("payload writes");
+
+        let message = connection
+            .receive_message_with_length_prefix()
+            .await
+            .expect("frame under limit is accepted");
+
+        assert_eq!(message, b"hello");
+    }
+
+    #[tokio::test]
+    async fn rejects_frame_above_limit_before_payload_read() {
+        let (mut client, server) = socket_pair().await.expect("socket pair opens");
+        let mut connection = TcpConnection::with_stream("test".to_string(), test_config(4), server);
+
+        client
+            .write_all(&(5_u32.to_be_bytes()))
+            .await
+            .expect("length writes");
+
+        let error = connection
+            .receive_message_with_length_prefix()
+            .await
+            .expect_err("oversized frame is rejected");
+
+        assert!(error.to_string().contains("exceeding max_frame_bytes"));
+    }
+
+    #[tokio::test]
+    async fn rejects_outbound_frame_above_limit() {
+        let (_client, server) = socket_pair().await.expect("socket pair opens");
+        let mut connection = TcpConnection::with_stream("test".to_string(), test_config(4), server);
+
+        let error = connection
+            .send_message_with_length_prefix(b"hello")
+            .await
+            .expect_err("oversized outbound frame is rejected");
+
+        assert!(error.to_string().contains("exceeding max_frame_bytes"));
     }
 }

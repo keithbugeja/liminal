@@ -82,6 +82,7 @@ pub enum GraphDiagnosticSeverity {
 pub enum GraphDiagnosticKind {
     DanglingInputChannel,
     DuplicateChannelProducer,
+    DirectChannelFanout,
     OrphanProducedChannel,
     CycleDetected,
 }
@@ -174,6 +175,7 @@ impl ResolvedPipelineGraph {
         channels.sort_by(|a, b| a.name.cmp(&b.name));
 
         diagnostics.extend(orphan_channel_diagnostics(&channels));
+        diagnostics.extend(direct_channel_fanout_diagnostics(&channels));
         diagnostics.extend(cycle_diagnostics(&nodes, &edges));
         diagnostics.sort_by(|a, b| {
             diagnostic_sort_key(a)
@@ -558,6 +560,35 @@ fn orphan_channel_diagnostics(channels: &[GraphChannel]) -> Vec<GraphDiagnostic>
         .collect()
 }
 
+fn direct_channel_fanout_diagnostics(channels: &[GraphChannel]) -> Vec<GraphDiagnostic> {
+    channels
+        .iter()
+        .filter(|channel| {
+            channel.channel_type == "direct"
+                && channel.producer_node_ids.len() == 1
+                && channel.consumer_node_ids.len() > 1
+        })
+        .map(|channel| {
+            let mut node_ids = channel.producer_node_ids.clone();
+            node_ids.extend(channel.consumer_node_ids.clone());
+            node_ids.sort();
+            node_ids.dedup();
+
+            GraphDiagnostic {
+                kind: GraphDiagnosticKind::DirectChannelFanout,
+                severity: GraphDiagnosticSeverity::Error,
+                message: format!(
+                    "Channel '{}' uses direct delivery but has {} consumers. Direct channels support exactly one consumer; use broadcast or fanout for one-to-many delivery.",
+                    channel.name,
+                    channel.consumer_node_ids.len()
+                ),
+                channel_name: Some(channel.name.clone()),
+                node_ids,
+            }
+        })
+        .collect()
+}
+
 fn cycle_diagnostics(nodes: &[GraphNode], edges: &[GraphEdge]) -> Vec<GraphDiagnostic> {
     let transform_node_ids: HashSet<&str> = nodes
         .iter()
@@ -816,6 +847,34 @@ mod tests {
                 .iter()
                 .all(|diagnostic| { diagnostic.kind != GraphDiagnosticKind::DanglingInputChannel })
         );
+    }
+
+    #[test]
+    fn reports_direct_channel_fanout() {
+        let graph = graph_from_toml(
+            r#"
+            [inputs.sensor]
+            type = "simulated"
+            output = "raw"
+            channel = { type = "direct", capacity = 8 }
+
+            [pipelines.main]
+            description = "main"
+
+            [pipelines.main.stages.a]
+            type = "rule"
+            inputs = ["raw"]
+            output = "a_out"
+
+            [pipelines.main.stages.b]
+            type = "rule"
+            inputs = ["raw"]
+            output = "b_out"
+            "#,
+        );
+
+        assert_has_diagnostic(&graph, GraphDiagnosticKind::DirectChannelFanout, "raw");
+        assert_eq!(graph.summary.error_count, 1);
     }
 
     #[test]

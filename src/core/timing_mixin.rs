@@ -90,8 +90,16 @@ impl TimingMixin {
     ) -> Message {
         let event_time = if let Some(ref source_config) = self.source_config {
             if let Some(event_time_field) = &source_config.event_time_field {
-                // Extract event time from payload (fallback to provided time if not found)
-                TimingHelpers::extract_event_time(&payload, event_time_field)
+                match TimingHelpers::extract_timestamp_field(&payload, event_time_field) {
+                    Some(event_time) => event_time,
+                    None => {
+                        tracing::debug!(
+                            field = %event_time_field,
+                            "Could not extract configured event time field; using fallback event time"
+                        );
+                        fallback_event_time
+                    }
+                }
             } else {
                 fallback_event_time
             }

@@ -31,10 +31,17 @@ where
     pub async fn recv(&mut self) -> Option<M> {
         match self {
             Subscriber::Mpsc(rx) => rx.recv().await,
-            Subscriber::Broadcast(rx) => match rx.recv().await {
-                Ok(msg) => Some(msg),
-                Err(broadcast::error::RecvError::Lagged(_)) => None,
-                Err(broadcast::error::RecvError::Closed) => None,
+            Subscriber::Broadcast(rx) => loop {
+                match rx.recv().await {
+                    Ok(msg) => return Some(msg),
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                        tracing::warn!(
+                            skipped_messages = skipped,
+                            "Broadcast subscriber lagged; skipping stale messages"
+                        );
+                    }
+                    Err(broadcast::error::RecvError::Closed) => return None,
+                }
             },
             Subscriber::Flume(rx) => match rx.recv_async().await {
                 Ok(msg) => Some(msg),
@@ -243,6 +250,35 @@ where
         }
 
         Subscriber::Fanout(receiver)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::message::Message;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn broadcast_recv_skips_lagged_messages() {
+        let channel = BroadcastChannel::new(1);
+        let mut subscriber = channel.subscribe();
+
+        channel
+            .publish(Message::new("test", "first", json!({ "value": 1 })))
+            .await
+            .expect("first publish succeeds");
+        channel
+            .publish(Message::new("test", "second", json!({ "value": 2 })))
+            .await
+            .expect("second publish succeeds");
+
+        let received = subscriber
+            .recv()
+            .await
+            .expect("lagged subscriber receives newest available message");
+
+        assert_eq!(received.topic, "second");
     }
 }
 

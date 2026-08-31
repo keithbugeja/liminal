@@ -34,6 +34,7 @@
 use crate::config::field::FieldConfig;
 use crate::config::params::extract_field_params;
 use crate::config::types::*;
+use std::collections::HashMap;
 
 /// Validates the entire Liminal configuration for structural correctness.
 ///
@@ -96,7 +97,83 @@ pub fn validate_config(config: &Config) -> anyhow::Result<()> {
         validate_output_stage(name, stage_config)?;
     }
 
+    validate_channel_topology(config)?;
+
     Ok(())
+}
+
+fn validate_channel_topology(config: &Config) -> anyhow::Result<()> {
+    let mut producers: HashMap<&str, &ChannelConfig> = HashMap::new();
+    let mut consumers: HashMap<&str, Vec<String>> = HashMap::new();
+
+    for (name, stage_config) in &config.inputs {
+        if let Some(output) = stage_config.output.as_deref() {
+            producers.insert(
+                output,
+                stage_config.channel.as_ref().unwrap_or(&DEFAULT_CHANNEL),
+            );
+        }
+
+        collect_consumers(format!("inputs.{}", name), stage_config, &mut consumers);
+    }
+
+    for (pipeline_name, pipeline_config) in &config.pipelines {
+        for (stage_name, stage_config) in &pipeline_config.stages {
+            if let Some(output) = stage_config.output.as_deref() {
+                producers.insert(
+                    output,
+                    stage_config.channel.as_ref().unwrap_or(&DEFAULT_CHANNEL),
+                );
+            }
+
+            collect_consumers(
+                format!("pipelines.{}.stages.{}", pipeline_name, stage_name),
+                stage_config,
+                &mut consumers,
+            );
+        }
+    }
+
+    for (name, stage_config) in &config.outputs {
+        collect_consumers(format!("outputs.{}", name), stage_config, &mut consumers);
+    }
+
+    for (channel_name, channel_config) in producers {
+        let consumer_names = consumers
+            .get(channel_name)
+            .map(Vec::as_slice)
+            .unwrap_or(&[]);
+        if channel_config.r#type == ChannelType::Direct && consumer_names.len() > 1 {
+            return Err(anyhow::anyhow!(
+                "Channel '{}' uses direct delivery but has {} consumers: {}. Direct channels support exactly one consumer; use broadcast or fanout for one-to-many delivery.",
+                channel_name,
+                consumer_names.len(),
+                consumer_names.join(", ")
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+static DEFAULT_CHANNEL: ChannelConfig = ChannelConfig {
+    r#type: ChannelType::Broadcast,
+    capacity: 128,
+};
+
+fn collect_consumers<'a>(
+    stage_label: String,
+    stage_config: &'a StageConfig,
+    consumers: &mut HashMap<&'a str, Vec<String>>,
+) {
+    if let Some(inputs) = &stage_config.inputs {
+        for input in inputs {
+            consumers
+                .entry(input.as_str())
+                .or_default()
+                .push(stage_label.clone());
+        }
+    }
 }
 
 /// Validates an input stage configuration.
@@ -319,4 +396,40 @@ fn validate_output_stage(name: &str, config: &StageConfig) -> anyhow::Result<()>
     // during processor creation, not here at the structural level
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::loader::load_config_from_string;
+
+    #[test]
+    fn rejects_direct_channel_with_multiple_consumers() {
+        let config = load_config_from_string(
+            r#"
+            [inputs.sensor]
+            type = "simulated"
+            output = "raw"
+            channel = { type = "direct", capacity = 8 }
+
+            [pipelines.main]
+            description = "main"
+
+            [pipelines.main.stages.a]
+            type = "rule"
+            inputs = ["raw"]
+            output = "a_out"
+
+            [pipelines.main.stages.b]
+            type = "rule"
+            inputs = ["raw"]
+            output = "b_out"
+            "#,
+        )
+        .expect("config parses");
+
+        let error = validate_config(&config).expect_err("direct fanout is rejected");
+        assert!(error.to_string().contains("direct delivery"));
+        assert!(error.to_string().contains("raw"));
+    }
 }
