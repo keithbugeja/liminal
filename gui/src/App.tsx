@@ -1,5 +1,12 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { ConfigBrowserPanel } from "./components/config-browser/ConfigBrowserPanel";
+import {
+  RuntimeConsole,
+  RuntimeLogEntry,
+  RuntimeLogStream,
+  RuntimeState,
+} from "./components/runtime-console/RuntimeConsole";
 import {
   Background,
   BaseEdge,
@@ -29,14 +36,9 @@ import {
   ArrowUp,
   Boxes,
   CircleDot,
-  FilePlus,
-  FileJson,
-  FolderOpen,
   GitBranch,
-  History,
   Info,
   Loader2,
-  MoreHorizontal,
   Network,
   PanelLeftClose,
   PanelLeftOpen,
@@ -44,21 +46,16 @@ import {
   PanelRightOpen,
   Play,
   Plus,
-  RefreshCw,
   RotateCcw,
-  Save,
   Search,
   Square,
-  Terminal,
   Trash2,
 } from "lucide-react";
 import {
-  KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   ReactNode,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -69,8 +66,6 @@ type GraphLane = "inputs" | "pipeline_stages" | "outputs";
 type DiagnosticSeverity = "warning" | "error";
 type DiagnosticsFilter = "all" | "errors" | "warnings";
 type SaveState = "idle" | "dirty" | "saving" | "error";
-type RuntimeState = "idle" | "starting" | "running" | "stopping" | "error";
-type RuntimeLogStream = "stdout" | "stderr" | "system";
 
 type ResolvedPipelineGraph = {
   schema_version: number;
@@ -84,18 +79,6 @@ type ResolvedPipelineGraph = {
 type DraftEditResult = {
   graph: ResolvedPipelineGraph;
   content: string;
-};
-
-type RuntimeLogEntry = {
-  id: number;
-  stream: RuntimeLogStream;
-  line: string;
-};
-
-type AnsiTextState = {
-  color: string | null;
-  bold: boolean;
-  dim: boolean;
 };
 
 type PipelineLogEvent = {
@@ -1594,300 +1577,6 @@ function ToolsSidebarSection({
       </div>
       <div className="tools-sidebar-section-body">{children}</div>
     </section>
-  );
-}
-
-function ConfigBrowserPanel({
-  configPath,
-  draftContent,
-  exampleConfigs,
-  isDirty,
-  loadState,
-  recentConfigPaths,
-  saveState,
-  showExamples,
-  workspaceConfigs,
-  workspacePath,
-  onClearRecent,
-  onCopyIntoWorkspace,
-  onLoadConfig,
-  onNewConfig,
-  onOpenFile,
-  onOpenFolder,
-  onReload,
-  onRevert,
-  onSave,
-  onSaveAs,
-  onToggleExamples,
-}: {
-  configPath: string;
-  draftContent: string | null;
-  exampleConfigs: string[];
-  isDirty: boolean;
-  loadState: "idle" | "loading" | "error";
-  recentConfigPaths: string[];
-  saveState: SaveState;
-  showExamples: boolean;
-  workspaceConfigs: string[];
-  workspacePath: string;
-  onClearRecent: () => void;
-  onCopyIntoWorkspace: (sourcePath?: string) => void;
-  onLoadConfig: (path: string) => void;
-  onNewConfig: () => void;
-  onOpenFile: () => void;
-  onOpenFolder: () => void;
-  onReload: () => void;
-  onRevert: () => void;
-  onSave: () => void;
-  onSaveAs: () => void;
-  onToggleExamples: (show: boolean) => void;
-}) {
-  const [filterText, setFilterText] = useState("");
-  const [workspaceOpen, setWorkspaceOpen] = useState(true);
-  const [recentOpen, setRecentOpen] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const filteredWorkspaceConfigs = filterConfigPaths(workspaceConfigs, filterText);
-  const filteredRecentConfigPaths = filterConfigPaths(recentConfigPaths, filterText);
-  const filteredExampleConfigs = filterConfigPaths(exampleConfigs, filterText);
-  const activeFileName = configFileName(configPath);
-  const activeFolderName = configParentName(configPath);
-
-  return (
-    <div className="config-browser">
-      <div className="file-browser-current">
-        <FileJson size={17} />
-        <div className="current-file-label" title={configPath}>
-          <strong>{activeFileName}</strong>
-          <span>{activeFolderName}</span>
-        </div>
-        <span className={isDirty ? "file-browser-badge dirty" : "file-browser-badge"}>
-          {isDirty ? "Unsaved" : "Saved"}
-        </span>
-        <button
-          className="file-menu-trigger"
-          onClick={() => setMenuOpen((open) => !open)}
-          aria-label="File actions"
-          title="File actions"
-        >
-          <MoreHorizontal size={18} />
-        </button>
-        {menuOpen && (
-          <div className="file-menu">
-            <button
-              onClick={() => {
-                setMenuOpen(false);
-                onReload();
-              }}
-            >
-              {loadState === "loading" ? <Loader2 className="spin" size={15} /> : <RefreshCw size={15} />}
-              <span>Reload</span>
-            </button>
-            <button
-              disabled={!isDirty || saveState === "saving"}
-              onClick={() => {
-                setMenuOpen(false);
-                onSave();
-              }}
-            >
-              <Save size={15} />
-              <span>Save</span>
-            </button>
-            <button
-              disabled={!isDirty || saveState === "saving"}
-              onClick={() => {
-                setMenuOpen(false);
-                onRevert();
-              }}
-            >
-              <RotateCcw size={15} />
-              <span>Revert</span>
-            </button>
-            <button
-              disabled={draftContent === null || saveState === "saving"}
-              onClick={() => {
-                setMenuOpen(false);
-                onSaveAs();
-              }}
-            >
-              <Save size={15} />
-              <span>Save As</span>
-            </button>
-            <button
-              onClick={() => {
-                setMenuOpen(false);
-                onOpenFile();
-              }}
-            >
-              <FileJson size={15} />
-              <span>Open File</span>
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="file-filter-row">
-        <Search size={17} />
-        <input
-          value={filterText}
-          onChange={(event) => setFilterText(event.target.value)}
-          placeholder="Filter files"
-          aria-label="Filter files"
-        />
-      </div>
-
-      <FileBrowserSection
-        title="Workspace"
-        icon={<FolderOpen size={14} />}
-        count={workspaceConfigs.length}
-        collapsed={!workspaceOpen}
-        onToggle={() => setWorkspaceOpen((open) => !open)}
-        meta={workspacePath ? configParentName(workspacePath) || configFileName(workspacePath) : undefined}
-        metaTitle={workspacePath}
-      >
-        {filteredWorkspaceConfigs.length === 0 ? (
-          <p className="empty-state">{workspacePath ? "No TOML files found." : "No folder selected."}</p>
-        ) : (
-          <ConfigFileList paths={filteredWorkspaceConfigs} activePath={configPath} onLoad={onLoadConfig} />
-        )}
-      </FileBrowserSection>
-
-      <FileBrowserSection
-        title="Recent"
-        icon={<History size={14} />}
-        count={recentConfigPaths.length}
-        collapsed={!recentOpen}
-        onToggle={() => setRecentOpen((open) => !open)}
-        action={recentConfigPaths.length > 0 && recentOpen ? <button onClick={onClearRecent}>Clear</button> : undefined}
-      >
-        {filteredRecentConfigPaths.length === 0 ? (
-          <p className="empty-state">No recent configs.</p>
-        ) : (
-          <ConfigFileList paths={filteredRecentConfigPaths} activePath={configPath} onLoad={onLoadConfig} />
-        )}
-      </FileBrowserSection>
-
-      <FileBrowserSection
-        title="Examples"
-        icon={<FileJson size={14} />}
-        count={exampleConfigs.length}
-        action={
-          <label className="file-toggle-row">
-            <span>Read only</span>
-            <input
-              type="checkbox"
-              checked={showExamples}
-              onChange={(event) => onToggleExamples(event.target.checked)}
-            />
-          </label>
-        }
-      >
-        {showExamples && (
-          <ConfigFileList
-            paths={filteredExampleConfigs}
-            activePath={configPath}
-            readOnly
-            canCopy={Boolean(workspacePath) && saveState !== "saving"}
-            onCopy={onCopyIntoWorkspace}
-            onLoad={onLoadConfig}
-          />
-        )}
-      </FileBrowserSection>
-
-      <div className="file-browser-footer">
-        <button onClick={onNewConfig} title="New empty TOML config">
-          <FilePlus size={15} />
-          <span>New file</span>
-        </button>
-        <button onClick={onOpenFolder}>
-          <FolderOpen size={15} />
-          <span>Open folder</span>
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function FileBrowserSection({
-  title,
-  icon,
-  action,
-  collapsed = false,
-  count,
-  meta,
-  metaTitle,
-  onToggle,
-  children,
-}: {
-  title: string;
-  icon: ReactNode;
-  action?: ReactNode;
-  collapsed?: boolean;
-  count?: number;
-  meta?: string;
-  metaTitle?: string;
-  onToggle?: () => void;
-  children: ReactNode;
-}) {
-  return (
-    <section className="file-browser-section">
-      <div className="file-browser-section-title">
-        <button className="file-browser-section-toggle" onClick={onToggle} disabled={!onToggle}>
-          <span className={collapsed ? "section-caret" : "section-caret open"} />
-          {icon}
-          <span>{title}</span>
-        </button>
-        <div className="file-browser-section-meta">
-          {action}
-          {meta ? <strong title={metaTitle}>{meta}</strong> : null}
-          {count !== undefined && <em>{count}</em>}
-        </div>
-      </div>
-      {!collapsed && children}
-    </section>
-  );
-}
-
-function ConfigFileList({
-  paths,
-  activePath,
-  canCopy = false,
-  onLoad,
-  onCopy,
-  readOnly = false,
-}: {
-  paths: string[];
-  activePath: string;
-  canCopy?: boolean;
-  onLoad: (path: string) => void;
-  onCopy?: (path: string) => void;
-  readOnly?: boolean;
-}) {
-  return (
-    <div className="example-list compact">
-      {paths.map((path) => (
-        <div
-          key={path}
-          className={[
-            "example",
-            path === activePath ? "active" : "",
-            readOnly ? "read-only" : "",
-          ]
-            .filter(Boolean)
-            .join(" ")}
-          title={path}
-        >
-          <button className="example-load" onClick={() => onLoad(path)}>
-            <span>{configFileName(path)}</span>
-            <strong>{configParentName(path)}</strong>
-          </button>
-          {canCopy && onCopy && (
-            <button className="example-copy" onClick={() => onCopy(path)}>
-              Copy in
-            </button>
-          )}
-        </div>
-      ))}
-    </div>
   );
 }
 
@@ -3803,284 +3492,6 @@ function DiagnosticsList({
   );
 }
 
-function RuntimeConsole({
-  logs,
-  state,
-  filter,
-  selectedNode,
-  selectedChannelName,
-  onFilterChange,
-  onClear,
-}: {
-  logs: RuntimeLogEntry[];
-  state: RuntimeState;
-  filter: "all" | "selection";
-  selectedNode: GraphNode | null;
-  selectedChannelName: string | null;
-  onFilterChange: (filter: "all" | "selection") => void;
-  onClear: () => void;
-}) {
-  const logListRef = useRef<HTMLDivElement | null>(null);
-  const autoScrollingRef = useRef(false);
-  const userScrollIntentRef = useRef(false);
-  const [followLogs, setFollowLogs] = useState(true);
-  const selectionTokens = runtimeSelectionTokens(selectedNode, selectedChannelName);
-  const filteredLogs =
-    filter === "selection" && selectionTokens.length > 0
-      ? logs.filter((entry) =>
-          selectionTokens.some((token) => entry.line.toLowerCase().includes(token.toLowerCase())),
-        )
-      : logs;
-  const stateLabel =
-    state === "starting"
-      ? "Starting"
-      : state === "running"
-        ? "Running"
-        : state === "stopping"
-          ? "Stopping"
-          : state === "error"
-            ? "Error"
-            : "Idle";
-  const selectionLabel = selectedChannelName ?? selectedNode?.display_name ?? "No selection";
-
-  useLayoutEffect(() => {
-    if (!followLogs) {
-      return;
-    }
-
-    const logList = logListRef.current;
-    if (!logList) {
-      return;
-    }
-
-    autoScrollingRef.current = true;
-    requestAnimationFrame(() => {
-      logList.scrollTop = logList.scrollHeight;
-      requestAnimationFrame(() => {
-        autoScrollingRef.current = false;
-      });
-    });
-  }, [filteredLogs.length, filter, followLogs]);
-
-  const markUserScrollIntent = useCallback(() => {
-    userScrollIntentRef.current = true;
-  }, []);
-
-  const handleLogKeyDown = useCallback(
-    (event: ReactKeyboardEvent<HTMLDivElement>) => {
-      if (
-        followLogs &&
-        ["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)
-      ) {
-        markUserScrollIntent();
-      }
-    },
-    [followLogs, markUserScrollIntent],
-  );
-
-  const handleLogScroll = useCallback(() => {
-    const logList = logListRef.current;
-    if (!logList || !followLogs || autoScrollingRef.current || !userScrollIntentRef.current) {
-      return;
-    }
-
-    const distanceFromBottom = logList.scrollHeight - logList.scrollTop - logList.clientHeight;
-    if (distanceFromBottom > 16) {
-      setFollowLogs(false);
-    }
-    userScrollIntentRef.current = false;
-  }, [followLogs]);
-
-  const resumeFollowingLogs = useCallback(() => {
-    setFollowLogs(true);
-    userScrollIntentRef.current = false;
-    requestAnimationFrame(() => {
-      const logList = logListRef.current;
-      if (logList) {
-        autoScrollingRef.current = true;
-        logList.scrollTop = logList.scrollHeight;
-        requestAnimationFrame(() => {
-          autoScrollingRef.current = false;
-        });
-      }
-    });
-  }, []);
-
-  return (
-    <section className="runtime-console">
-      <div className="runtime-console-header">
-        <div className="runtime-console-title">
-          <Terminal size={15} />
-          <span>Console</span>
-          <strong className={`runtime-state ${state}`}>{stateLabel}</strong>
-        </div>
-        <div className="runtime-console-actions">
-          <div className="runtime-filter" role="group" aria-label="Console filter">
-            <button
-              className={filter === "all" ? "active" : ""}
-              onClick={() => onFilterChange("all")}
-            >
-              All
-            </button>
-            <button
-              className={filter === "selection" ? "active" : ""}
-              onClick={() => onFilterChange("selection")}
-              disabled={selectionTokens.length === 0}
-              title={selectionLabel}
-            >
-              Selection
-            </button>
-          </div>
-          <button
-            className={followLogs ? "runtime-tail active" : "runtime-tail"}
-            onClick={followLogs ? () => setFollowLogs(false) : resumeFollowingLogs}
-            disabled={filteredLogs.length === 0}
-            title={followLogs ? "Stop following latest logs" : "Follow latest logs"}
-          >
-            Tail
-          </button>
-          <button className="runtime-clear" onClick={onClear} disabled={logs.length === 0}>
-            Clear
-          </button>
-        </div>
-      </div>
-      <div
-        className="runtime-log-list"
-        ref={logListRef}
-        onKeyDown={handleLogKeyDown}
-        onPointerDown={markUserScrollIntent}
-        onScroll={handleLogScroll}
-        onTouchStart={markUserScrollIntent}
-        onWheel={markUserScrollIntent}
-        tabIndex={0}
-      >
-        {filteredLogs.length === 0 ? (
-          <p className="runtime-empty">
-            {filter === "selection" && selectionTokens.length > 0
-              ? `No console lines match ${selectionLabel}.`
-              : "Run the pipeline to stream output here."}
-          </p>
-        ) : (
-          filteredLogs.map((entry) => (
-            <div className={`runtime-log-line ${entry.stream}`} key={entry.id}>
-              <span className="runtime-log-stream">{entry.stream}</span>
-              <code>{renderAnsiText(entry.line)}</code>
-            </div>
-          ))
-        )}
-      </div>
-    </section>
-  );
-}
-
-function renderAnsiText(text: string): ReactNode[] {
-  const ansiPattern = /\x1b\[([0-9;]*)m/g;
-  const chunks: ReactNode[] = [];
-  let cursor = 0;
-  let state: AnsiTextState = { color: null, bold: false, dim: false };
-  let match: RegExpExecArray | null;
-
-  while ((match = ansiPattern.exec(text)) !== null) {
-    if (match.index > cursor) {
-      chunks.push(renderAnsiChunk(text.slice(cursor, match.index), state, chunks.length));
-    }
-
-    state = applyAnsiCodes(state, match[1]);
-    cursor = match.index + match[0].length;
-  }
-
-  if (cursor < text.length) {
-    chunks.push(renderAnsiChunk(text.slice(cursor), state, chunks.length));
-  }
-
-  return chunks;
-}
-
-function renderAnsiChunk(text: string, state: AnsiTextState, key: number) {
-  if (!text) {
-    return null;
-  }
-
-  const classes = [
-    "ansi-text",
-    state.color ? `ansi-${state.color}` : "",
-    state.bold ? "ansi-bold" : "",
-    state.dim ? "ansi-dim" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
-  return (
-    <span className={classes || undefined} key={key}>
-      {text}
-    </span>
-  );
-}
-
-function applyAnsiCodes(state: AnsiTextState, rawCodes: string): AnsiTextState {
-  const codes = rawCodes.length === 0 ? [0] : rawCodes.split(";").map((code) => Number(code));
-  let next = { ...state };
-
-  for (const code of codes) {
-    switch (code) {
-      case 0:
-        next = { color: null, bold: false, dim: false };
-        break;
-      case 1:
-        next.bold = true;
-        next.dim = false;
-        break;
-      case 2:
-        next.dim = true;
-        next.bold = false;
-        break;
-      case 22:
-        next.bold = false;
-        next.dim = false;
-        break;
-      case 30:
-      case 90:
-        next.color = "black";
-        break;
-      case 31:
-      case 91:
-        next.color = "red";
-        break;
-      case 32:
-      case 92:
-        next.color = "green";
-        break;
-      case 33:
-      case 93:
-        next.color = "yellow";
-        break;
-      case 34:
-      case 94:
-        next.color = "blue";
-        break;
-      case 35:
-      case 95:
-        next.color = "magenta";
-        break;
-      case 36:
-      case 96:
-        next.color = "cyan";
-        break;
-      case 37:
-      case 97:
-        next.color = "white";
-        break;
-      case 39:
-        next.color = null;
-        break;
-      default:
-        break;
-    }
-  }
-
-  return next;
-}
-
 function GraphCanvas({
   graph,
   configPath,
@@ -4206,6 +3617,12 @@ function GraphCanvas({
     () => runtimeActivityFromLogs(graph, runtimeLogs),
     [graph, runtimeLogs],
   );
+  const runtimeSelectionTokenList = useMemo(
+    () => runtimeSelectionTokens(selectedRuntimeNode, selectedRuntimeChannelName),
+    [selectedRuntimeChannelName, selectedRuntimeNode],
+  );
+  const runtimeSelectionLabel =
+    selectedRuntimeChannelName ?? selectedRuntimeNode?.display_name ?? "No selection";
   const graphNodeIds = useMemo(() => graph?.nodes.map((node) => node.id) ?? [], [graph]);
   const graphNodeIdsKey = graphNodeIds.join("|");
 
@@ -4630,8 +4047,8 @@ function GraphCanvas({
         logs={runtimeLogs}
         state={runtimeState}
         filter={runtimeLogFilter}
-        selectedNode={selectedRuntimeNode}
-        selectedChannelName={selectedRuntimeChannelName}
+        selectionTokens={runtimeSelectionTokenList}
+        selectionLabel={runtimeSelectionLabel}
         onFilterChange={onRuntimeLogFilterChange}
         onClear={onClearRuntimeLogs}
       />
@@ -5870,29 +5287,6 @@ function graphFocusState(
   }
 
   return { activeNodeIds, activeEdgeIds };
-}
-
-function configFileName(path: string) {
-  const parts = path.split(/[\\/]/);
-  return parts[parts.length - 1] || path;
-}
-
-function configParentName(path: string) {
-  const parts = path.split(/[\\/]/).filter(Boolean);
-  if (parts.length <= 1) {
-    return "";
-  }
-
-  return parts[parts.length - 2];
-}
-
-function filterConfigPaths(paths: string[], filterText: string) {
-  const query = filterText.trim().toLowerCase();
-  if (!query) {
-    return paths;
-  }
-
-  return paths.filter((path) => path.toLowerCase().includes(query));
 }
 
 function normalizeComparablePath(path: string) {
