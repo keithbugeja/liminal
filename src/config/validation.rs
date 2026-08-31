@@ -191,10 +191,10 @@ fn validate_input_stage(name: &str, config: &StageConfig) -> anyhow::Result<()> 
 /// [pipelines.data_processing]
 /// description = "Process sensor data"
 ///
-/// [pipelines.data_processing.stages.scale]
-/// type = "scale"
+/// [pipelines.data_processing.stages.enrich]
+/// type = "fusion"
 /// inputs = ["raw_data"]
-/// output = "scaled_data"
+/// output = "enriched_data"
 /// ```
 fn validate_pipeline(name: &str, config: &PipelineConfig) -> anyhow::Result<()> {
     // Validate each stage within the pipeline
@@ -232,11 +232,11 @@ fn validate_pipeline(name: &str, config: &PipelineConfig) -> anyhow::Result<()> 
 /// # Example Valid Pipeline Stage
 ///
 /// ```toml
-/// [pipelines.main.stages.filter]
-/// type = "lowpass"
+/// [pipelines.main.stages.combine]
+/// type = "fusion"
 /// inputs = ["raw_data", "threshold_config"]
-/// output = "filtered_data"
-/// parameters = { field_in = "value", field_out = "filtered_value", threshold = 10.0 }
+/// output = "combined_data"
+/// parameters = { mode = "merge_objects", conflict_strategy = "prefix" }
 /// ```
 fn validate_pipeline_stage(
     pipeline_name: &str,
@@ -294,9 +294,9 @@ fn validate_pipeline_stage(
 ///
 /// ```toml
 /// [outputs.file_logger]
-/// type = "log"
+/// type = "file"
 /// inputs = ["processed_data", "error_data"]
-/// parameters = { destination = "file://logs/output.log", format = "json" }
+/// parameters = { file_path = "logs/output.jsonl" }
 /// ```
 fn validate_output_stage(name: &str, config: &StageConfig) -> anyhow::Result<()> {
     // Output stages must consume data from input streams

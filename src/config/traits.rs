@@ -18,29 +18,22 @@
 //! use liminal::config::StageConfig;
 //!
 //! #[derive(Debug)]
-//! struct ScaleProcessorConfig {
-//!     scale_factor: f64,
+//! struct OffsetProcessorConfig {
+//!     offset: f64,
 //!     field_in: String,
 //!     field_out: String,
 //! }
 //!
-//! impl ProcessorConfig for ScaleProcessorConfig {
+//! impl ProcessorConfig for OffsetProcessorConfig {
 //!     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
 //!         // Extract and validate processor-specific parameters
-//!         let scale_factor = extract_param(&config.parameters, "scale_factor", 1.0)?;
-//!         let field_in = extract_param(&config.parameters, "field_in", None::<String>)?
+//!         let offset = extract_param(&config.parameters, "offset", 0.0);
+//!         let field_in = extract_param(&config.parameters, "field_in", None::<String>)
 //!             .ok_or_else(|| anyhow::anyhow!("field_in parameter is required"))?;
-//!         let field_out = extract_param(&config.parameters, "field_out", None::<String>)?
+//!         let field_out = extract_param(&config.parameters, "field_out", None::<String>)
 //!             .ok_or_else(|| anyhow::anyhow!("field_out parameter is required"))?;
 //!         
-//!         Ok(Self { scale_factor, field_in, field_out })
-//!     }
-//!     
-//!     fn validate(&self) -> anyhow::Result<()> {
-//!         if self.scale_factor <= 0.0 {
-//!             return Err(anyhow::anyhow!("scale_factor must be positive"));
-//!         }
-//!         Ok(())
+//!         Ok(Self { offset, field_in, field_out })
 //!     }
 //! }
 //! ```
@@ -65,8 +58,8 @@ use crate::config::types::StageConfig;
 /// ## Required Parameters
 /// Use `extract_param` with `None` default and `ok_or_else` for required params:
 /// ```rust
-/// let scale_factor = extract_param(&config.parameters, "scale_factor", None::<f64>)?
-///     .ok_or_else(|| anyhow::anyhow!("scale_factor parameter is required"))?;
+/// let threshold = extract_param(&config.parameters, "threshold", None::<f64>)
+///     .ok_or_else(|| anyhow::anyhow!("threshold parameter is required"))?;
 /// ```
 ///
 /// ## Optional Parameters
@@ -118,15 +111,15 @@ use crate::config::types::StageConfig;
 /// use crate::config::params::{extract_param, extract_field_params};
 ///
 /// #[derive(Debug)]
-/// struct ScaleProcessorConfig {
-///     scale_factor: f64,
+/// struct OffsetProcessorConfig {
+///     offset: f64,
 ///     field_config: FieldConfig,
 /// }
 ///
-/// impl ProcessorConfig for ScaleProcessorConfig {
+/// impl ProcessorConfig for OffsetProcessorConfig {
 ///     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
 ///         // Extract scalar parameters
-///         let scale_factor = extract_param(&config.parameters, "scale_factor", 1.0)?;
+///         let offset = extract_param(&config.parameters, "offset", 0.0);
 ///         
 ///         // Extract field configuration
 ///         let field_config = extract_field_params(&config.parameters);
@@ -134,21 +127,14 @@ use crate::config::types::StageConfig;
 ///         // Validate field config is appropriate for this processor
 ///         match &field_config {
 ///             FieldConfig::Single { .. } | FieldConfig::Multiple { .. } => {
-///                 // Scale processor supports these field patterns
+///                 // This processor supports these field patterns
 ///             },
-///             _ => return Err(anyhow::anyhow!("Scale processor requires field mapping configuration")),
+///             _ => return Err(anyhow::anyhow!("Offset processor requires field mapping configuration")),
 ///         }
 ///         
-///         let config = Self { scale_factor, field_config };
+///         let config = Self { offset, field_config };
 ///         config.validate()?;
 ///         Ok(config)
-///     }
-///     
-///     fn validate(&self) -> anyhow::Result<()> {
-///         if self.scale_factor <= 0.0 {
-///             return Err(anyhow::anyhow!("scale_factor must be positive"));
-///         }
-///         Ok(())
 ///     }
 /// }
 /// ```
@@ -172,7 +158,7 @@ pub trait ProcessorConfig: Sized {
     /// # Error Guidelines
     ///
     /// Return errors that help users fix their configuration:
-    /// - "Parameter 'scale_factor' is required for scale processor"
+    /// - "Parameter 'threshold' is required for threshold processor"
     /// - "Parameter 'threshold' must be positive (got -5.0)"
     /// - "Parameter 'field_in' cannot be empty"
     ///
@@ -201,7 +187,7 @@ pub trait ProcessorConfig: Sized {
     ///
     /// # Example Validations
     ///
-    /// - Numeric ranges: "scale_factor must be positive"
+    /// - Numeric ranges: "threshold must be positive"
     /// - Field relationships: "field_in and field_out must be different"
     /// - Parameter combinations: "cannot specify both 'value' and 'range'"
     /// - Resource constraints: "buffer_size must be a power of 2"

@@ -30,35 +30,11 @@
 //! All functions in this module are thread-safe and can be called concurrently
 //! from multiple threads without external synchronisation.
 //!
-//! # Note (TODO):
-//! The factory could be extended to include metadata for each processor, such as
-//! name, description, and required/optional parameters. This would allow for more
-//! comprehensive introspection and documentation of available processors.
-//! ```
-//! pub struct ProcessorMetadata {
-//!     pub name: &'static str,
-//!     pub description: &'static str,
-//!     pub required_params: &'static [&'static str],
-//!     pub optional_params: &'static [&'static str],
-//! }
+//! # Processor Metadata
 //!
-//! type ProcessorConstructorWithMeta = (
-//!     ProcessorMetadata,
-//!     Box<dyn Fn(&str, StageConfig) -> anyhow::Result<Box<dyn Processor>> + Send + Sync>
-//! );
-//!
-//! // Registration becomes:
-//! register_processor_with_meta(
-//!     "scale",
-//!     ProcessorMetadata {
-//!         name: "scale",
-//!         description: "Scales numeric field values",
-//!         required_params: &["field_in", "field_out"],
-//!         optional_params: &["scale_factor"],
-//!     },
-//!     Box::new(ScaleProcessor::new)
-//! );
-//! ```
+//! Runtime construction lives here. GUI and documentation metadata lives in
+//! `crate::processors::descriptor`, which describes the built-in processors and
+//! their editable parameters.
 
 use crate::processors::{
     Processor,
@@ -145,10 +121,10 @@ pub fn list_processors() -> Vec<String> {
 ///
 /// # Example
 /// ```rust
-/// if processor_exists("scale") {
-///     let processor = create_processor("scale", config)?;
+/// if processor_exists("rule") {
+///     let processor = create_processor("rule", config)?;
 /// } else {
-///     eprintln!("Scale processor not available");
+///     eprintln!("Rule processor not available");
 /// }
 /// ```
 pub fn processor_exists(name: &str) -> bool {
@@ -230,7 +206,7 @@ fn ensure_default_processors() {
 /// with custom processors using `register_processor()`.
 ///
 /// # Arguments
-/// * `name` - The processor type name (e.g., "scale", "lowpass", "simulated")
+/// * `name` - The processor type name (e.g., "simulated", "rule", "console")
 /// * `config` - Configuration parameters for the processor
 ///
 /// # Returns
@@ -245,16 +221,15 @@ fn ensure_default_processors() {
 /// use liminal::config::StageConfig;
 ///
 /// let config = StageConfig {
-///     r#type: "scale".to_string(),
+///     r#type: "fusion".to_string(),
 ///     parameters: Some(HashMap::from([
-///         ("scale_factor".to_string(), json!(2.0)),
-///         ("field_in".to_string(), json!("input")),
-///         ("field_out".to_string(), json!("output")),
+///         ("mode".to_string(), json!("merge_objects")),
+///         ("conflict_strategy".to_string(), json!("prefix")),
 ///     ])),
 ///     // ... other fields
 /// };
 ///
-/// match create_processor("scale", config) {
+/// match create_processor("fusion", config) {
 ///     Ok(processor) => println!("Processor created successfully"),
 ///     Err(e) => eprintln!("Failed to create processor: {}", e),
 /// }

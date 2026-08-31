@@ -217,7 +217,7 @@ impl PipelineManager {
         let mut stages: HashMap<String, Arc<Mutex<Box<Stage>>>> = HashMap::new();
 
         for (stage_name, stage_config) in stage_configs {
-            println!("{} => {:?}", stage_name, stage_config);
+            tracing::debug!(stage = %stage_name, config = ?stage_config, "Creating stage");
 
             // Use the type as name of the stage
             // if let Some(stage) = create_stage(&stage_config.r#type, stage_config.clone()) {

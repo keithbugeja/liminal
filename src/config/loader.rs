@@ -106,17 +106,16 @@ use toml;
 /// [pipelines.main_processing]
 /// description = "Process temperature data"
 ///
-/// [pipelines.main_processing.stages.scale]
-/// type = "scale"
+/// [pipelines.main_processing.stages.combine]
+/// type = "fusion"
 /// inputs = ["raw_temp"]
-/// output = "scaled_temp"
-/// parameters = { field_in = "temperature", field_out = "scaled_temperature", scale_factor = 1.8 }
+/// output = "processed_temp"
+/// parameters = { mode = "merge_objects", conflict_strategy = "prefix" }
 ///
 /// # Output destinations
 /// [outputs.console]
-/// type = "log"
-/// inputs = ["scaled_temp"]
-/// parameters = { format = "json" }
+/// type = "console"
+/// inputs = ["processed_temp"]
 /// ```
 pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, Box<dyn std::error::Error>> {
     let content = fs::read_to_string(path)?;
@@ -156,7 +155,7 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, Box<dyn std::error
 ///     parameters = { field_out = "value", interval_ms = 100 }
 ///     
 ///     [outputs.test_sink]
-///     type = "log"
+///     type = "console"
 ///     inputs = ["test_data"]
 /// "#;
 ///
@@ -171,21 +170,21 @@ pub fn load_config<P: AsRef<Path>>(path: P) -> Result<Config, Box<dyn std::error
 ///
 /// ```rust
 /// #[test]
-/// fn test_scale_processor_config() {
+/// fn test_fusion_processor_config() {
 ///     let config_toml = r#"
 ///         [inputs.source]
 ///         type = "simulated"
 ///         output = "data"
 ///         
-///         [pipelines.test.stages.scale]
-///         type = "scale"
+///         [pipelines.test.stages.combine]
+///         type = "fusion"
 ///         inputs = ["data"]
-///         output = "scaled"
-///         parameters = { field_in = "value", field_out = "scaled_value", scale_factor = 2.0 }
+///         output = "combined"
+///         parameters = { mode = "merge_objects", conflict_strategy = "prefix" }
 ///         
 ///         [outputs.sink]
-///         type = "log"
-///         inputs = ["scaled"]
+///         type = "console"
+///         inputs = ["combined"]
 ///     "#;
 ///     
 ///     let config = load_config_from_string(config_toml).unwrap();
@@ -211,8 +210,8 @@ pub fn load_config_from_string(content: &str) -> Result<Config, Box<dyn std::err
 ///
 /// The default configuration includes:
 /// - **Input**: Simulated data source generating test data
-/// - **Pipeline**: Simple scale transformation
-/// - **Output**: Console logging for verification
+/// - **Pipeline**: Simple fusion pass-through for one input
+/// - **Output**: Console output for verification
 ///
 /// # Example
 ///
@@ -239,16 +238,15 @@ pub fn load_config_from_string(content: &str) -> Result<Config, Box<dyn std::err
 /// [pipelines.default_pipeline]
 /// description = "Default processing pipeline"
 ///
-/// [pipelines.default_pipeline.stages.scale]
-/// type = "scale"
+/// [pipelines.default_pipeline.stages.combine]
+/// type = "fusion"
 /// inputs = ["raw_data"]
 /// output = "processed_data"
-/// parameters = { field_in = "value", field_out = "scaled_value", scale_factor = 1.0 }
+/// parameters = { mode = "merge_objects", conflict_strategy = "prefix" }
 ///
 /// [outputs.default_console]
-/// type = "log"
+/// type = "console"
 /// inputs = ["processed_data"]
-/// parameters = { format = "pretty" }
 /// ```
 pub fn default_config() -> Config {
     use super::types::{PipelineConfig, StageConfig};
@@ -272,7 +270,7 @@ pub fn default_config() -> Config {
 
     // Create default pipeline stage
     let default_stage = StageConfig {
-        r#type: "scale".to_string(),
+        r#type: "fusion".to_string(),
         inputs: Some(vec!["raw_data".to_string()]),
         output: Some("processed_data".to_string()),
         concurrency: None,
@@ -280,26 +278,21 @@ pub fn default_config() -> Config {
         timing: None,
         parameters: Some({
             let mut params = HashMap::new();
-            params.insert("field_in".to_string(), serde_json::json!("value"));
-            params.insert("field_out".to_string(), serde_json::json!("scaled_value"));
-            params.insert("scale_factor".to_string(), serde_json::json!(1.0));
+            params.insert("mode".to_string(), serde_json::json!("merge_objects"));
+            params.insert("conflict_strategy".to_string(), serde_json::json!("prefix"));
             params
         }),
     };
 
     // Create default output stage
     let default_output = StageConfig {
-        r#type: "log".to_string(),
+        r#type: "console".to_string(),
         inputs: Some(vec!["processed_data".to_string()]),
         output: None,
         concurrency: None,
         channel: None,
         timing: None,
-        parameters: Some({
-            let mut params = HashMap::new();
-            params.insert("format".to_string(), serde_json::json!("pretty"));
-            params
-        }),
+        parameters: None,
     };
 
     // Assemble the complete configuration
@@ -315,7 +308,7 @@ pub fn default_config() -> Config {
                 description: "Default processing pipeline".to_string(),
                 stages: HashMap::new(),
             };
-            pipeline.stages.insert("scale".to_string(), default_stage);
+            pipeline.stages.insert("combine".to_string(), default_stage);
             pipelines.insert("default_pipeline".to_string(), pipeline);
             pipelines
         },

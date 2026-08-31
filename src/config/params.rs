@@ -29,7 +29,7 @@
 //! use liminal::config::params::{extract_param, extract_field_params};
 //!
 //! // Extract scalar parameters with defaults
-//! let scale_factor = extract_param(&config.parameters, "scale_factor", 1.0);
+//! let threshold = extract_param(&config.parameters, "threshold", 1.0);
 //! let timeout = extract_param(&config.parameters, "timeout", 5000_u64);
 //!
 //! // Extract field configuration
@@ -71,13 +71,13 @@ use std::collections::HashMap;
 /// use serde_json::json;
 ///
 /// let mut params = HashMap::new();
-/// params.insert("scale_factor".to_string(), json!(2.5));
+/// params.insert("threshold".to_string(), json!(2.5));
 /// params.insert("iterations".to_string(), json!(100));
 /// params.insert("enable_logging".to_string(), json!(true));
 ///
 /// // Extract with correct types
-/// let scale: f64 = extract_param(&Some(params.clone()), "scale_factor", 1.0);
-/// assert_eq!(scale, 2.5);
+/// let threshold: f64 = extract_param(&Some(params.clone()), "threshold", 1.0);
+/// assert_eq!(threshold, 2.5);
 ///
 /// // Extract missing parameter (returns default)
 /// let missing: i32 = extract_param(&Some(params.clone()), "missing_key", 42);
@@ -129,12 +129,12 @@ where
 ///
 /// **Parameters**: `field_in` and `field_out`  
 /// **Use case**: Transform one input field to one output field  
-/// **Example**: Scale a temperature value
+/// **Example**: Transform a temperature value
 ///
 /// ```toml
 /// [stage.parameters]
 /// field_in = "temperature"
-/// field_out = "scaled_temperature"
+/// field_out = "adjusted_temperature"
 /// ```
 ///
 /// ## 2. Output-Only Configuration
@@ -152,12 +152,12 @@ where
 ///
 /// **Parameters**: `fields_in` and `fields_out` arrays  
 /// **Use case**: Apply same transformation to multiple fields  
-/// **Example**: Scale multiple sensor readings
+/// **Example**: Transform multiple sensor readings
 ///
 /// ```toml
 /// [stage.parameters]
 /// fields_in = ["temp", "humidity", "pressure"]
-/// fields_out = ["scaled_temp", "scaled_humidity", "scaled_pressure"]
+/// fields_out = ["adjusted_temp", "adjusted_humidity", "adjusted_pressure"]
 /// ```
 ///
 /// **Note**: Arrays must have the same length, mismatched lengths are ignored with a warning.
@@ -177,7 +177,7 @@ where
 ///
 /// **Default**: When no field parameters are found  
 /// **Use case**: Processors that work with entire messages  
-/// **Example**: Logging processors
+/// **Example**: Console output processors
 ///
 /// # Arguments
 ///

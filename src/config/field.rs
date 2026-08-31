@@ -21,13 +21,13 @@ use std::fmt;
 /// // Simple field transformation
 /// let config = FieldConfig::Single {
 ///     input: "temperature".to_string(),
-///     output: "scaled_temp".to_string(),
+///     output: "adjusted_temp".to_string(),
 /// };
 ///
 /// // Multiple parallel transformations
 /// let config = FieldConfig::Multiple {
 ///     inputs: vec!["temp".to_string(), "humidity".to_string()],
-///     outputs: vec!["scaled_temp".to_string(), "scaled_humidity".to_string()],
+///     outputs: vec!["adjusted_temp".to_string(), "adjusted_humidity".to_string()],
 /// };
 /// ```
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -35,7 +35,7 @@ pub enum FieldConfig {
     /// Single field transformation: input field → output field
     ///
     /// Used when a processor transforms one input field to one output field.
-    /// This is the most common case for processors like scale, filter, etc.
+    /// This is the most common case for processors that rewrite or derive fields.
     Single { input: String, output: String },
 
     /// Multiple parallel field transformations

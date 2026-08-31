@@ -210,7 +210,7 @@ use crate::config::{
 
 #[derive(Debug)]
 struct MyProcessorConfig {
-    scale_factor: f64,
+    bias: f64,
     field: FieldConfig,
     timing: Option<crate::config::TimingConfig>,
 }
@@ -218,7 +218,7 @@ struct MyProcessorConfig {
 impl ProcessorConfig for MyProcessorConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         // Extract scalar parameters
-        let scale_factor = extract_param(&config.parameters, "scale_factor", 1.0);
+        let bias = extract_param(&config.parameters, "bias", 0.0);
         
         // Extract field configuration
         let field_config = extract_field_params(&config.parameters);
@@ -226,16 +226,16 @@ impl ProcessorConfig for MyProcessorConfig {
         // Validate field config is appropriate for this processor
         match &field_config {
             FieldConfig::Single { .. } | FieldConfig::Multiple { .. } => {
-                // Scale processor supports these field patterns
+                // This processor supports these field patterns
             },
-            _ => return Err(anyhow::anyhow!("Scale processor requires field mapping configuration")),
+            _ => return Err(anyhow::anyhow!("MyProcessor requires field mapping configuration")),
         }
         
         // Extract timing configuration
         let timing_config = config.timing.clone();
         
         let config = Self { 
-            scale_factor, 
+            bias, 
             field: field_config,
             timing: timing_config,
         };
@@ -244,9 +244,6 @@ impl ProcessorConfig for MyProcessorConfig {
     }
     
     fn validate(&self) -> anyhow::Result<()> {
-        if self.scale_factor <= 0.0 {
-            return Err(anyhow::anyhow!("scale_factor must be positive"));
-        }
         self.field.validate()?;
         Ok(())
     }
@@ -306,7 +303,7 @@ type = "my_processor"
 output = "processed_data"
 
 [inputs.my_input.parameters]
-scale_factor = 2.0
+bias = 2.0
 field_in = "input_field"
 field_out = "output_field"
 
@@ -316,9 +313,9 @@ type = "my_processor"
 output = "processed_data"
 
 [inputs.my_input_multi.parameters]
-scale_factor = 2.0
+bias = 2.0
 fields_in = ["temp", "humidity"]
-fields_out = ["scaled_temp", "scaled_humidity"]
+fields_out = ["adjusted_temp", "adjusted_humidity"]
 
 # Output-only (for input processors)
 [inputs.my_generator]
@@ -326,7 +323,7 @@ type = "my_processor"
 output = "generated_data"
 
 [inputs.my_generator.parameters]
-scale_factor = 2.0
+bias = 2.0
 field_out = "generated_value"
 ```
 

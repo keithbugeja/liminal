@@ -225,12 +225,12 @@ const fn default_capacity() -> usize {
 /// max_lateness_ms = 5000
 ///
 /// [pipelines.processing.stages.filter]
-/// type = "lowpass"
+/// type = "rule"
 /// inputs = ["raw_data"]
 /// output = "filtered_data"
 ///
 /// [outputs.console]
-/// type = "log"
+/// type = "console"
 /// inputs = ["filtered_data"]
 /// ```
 #[derive(Clone, Debug, Deserialize, Default)]
@@ -261,7 +261,7 @@ pub struct Config {
 /// - **Output stages**: Consume data, have `inputs` but no `output`
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct StageConfig {
-    /// The processor type to instantiate (e.g., "simulated", "scale", "log")
+    /// The processor type to instantiate (e.g., "simulated", "rule", "console")
     #[serde(rename = "type")]
     pub r#type: String,
 
