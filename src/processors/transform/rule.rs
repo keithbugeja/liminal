@@ -78,8 +78,9 @@ impl ProcessorConfig for RuleConfig {
                     )
                 })?;
 
-            if !operation.is_unconditional() && rule.condition.field_path.is_empty() {
-                return Err(anyhow!("Rule {} has empty field_path", i));
+            if !operation.is_unconditional() {
+                FieldUtils::validate_field_path(&rule.condition.field_path)
+                    .map_err(|error| anyhow!("Rule {} has invalid field_path: {}", i, error))?;
             }
 
             if rule.actions.is_empty() {
@@ -105,25 +106,25 @@ impl RuleConfig {
     fn validate_action(action: &Action, context: &str) -> Result<()> {
         match action {
             Action::SetField { field_path, .. } => {
-                if field_path.is_empty() {
-                    return Err(anyhow!("{}: SetField has empty field_path", context));
-                }
+                FieldUtils::validate_field_path(field_path).map_err(|error| {
+                    anyhow!("{}: SetField has invalid field_path: {}", context, error)
+                })?;
             }
             Action::RemoveField { field_path } => {
-                if field_path.is_empty() {
-                    return Err(anyhow!("{}: RemoveField has empty field_path", context));
-                }
+                FieldUtils::validate_field_path(field_path).map_err(|error| {
+                    anyhow!("{}: RemoveField has invalid field_path: {}", context, error)
+                })?;
             }
             Action::CopyField {
                 source_field,
                 target_field,
             } => {
-                if source_field.is_empty() {
-                    return Err(anyhow!("{}: CopyField has empty source_field", context));
-                }
-                if target_field.is_empty() {
-                    return Err(anyhow!("{}: CopyField has empty target_field", context));
-                }
+                FieldUtils::validate_field_path(source_field).map_err(|error| {
+                    anyhow!("{}: CopyField has invalid source_field: {}", context, error)
+                })?;
+                FieldUtils::validate_field_path(target_field).map_err(|error| {
+                    anyhow!("{}: CopyField has invalid target_field: {}", context, error)
+                })?;
                 if source_field == target_field {
                     return Err(anyhow!(
                         "{}: CopyField source and target are the same",
@@ -135,12 +136,12 @@ impl RuleConfig {
                 old_field,
                 new_field,
             } => {
-                if old_field.is_empty() {
-                    return Err(anyhow!("{}: RenameField has empty old_field", context));
-                }
-                if new_field.is_empty() {
-                    return Err(anyhow!("{}: RenameField has empty new_field", context));
-                }
+                FieldUtils::validate_field_path(old_field).map_err(|error| {
+                    anyhow!("{}: RenameField has invalid old_field: {}", context, error)
+                })?;
+                FieldUtils::validate_field_path(new_field).map_err(|error| {
+                    anyhow!("{}: RenameField has invalid new_field: {}", context, error)
+                })?;
                 if old_field == new_field {
                     return Err(anyhow!(
                         "{}: RenameField old and new field are the same",
@@ -152,9 +153,13 @@ impl RuleConfig {
                 field_path,
                 expression,
             } => {
-                if field_path.is_empty() {
-                    return Err(anyhow!("{}: ComputeField has empty field_path", context));
-                }
+                FieldUtils::validate_field_path(field_path).map_err(|error| {
+                    anyhow!(
+                        "{}: ComputeField has invalid field_path: {}",
+                        context,
+                        error
+                    )
+                })?;
                 if expression.is_empty() {
                     return Err(anyhow!("{}: ComputeField has empty expression", context));
                 }
@@ -163,12 +168,13 @@ impl RuleConfig {
             Action::KeepOnlyFields { field_paths } => {
                 // Empty field_paths is valid - it means "keep no fields" (clear everything)
                 for field_path in field_paths {
-                    if field_path.is_empty() {
-                        return Err(anyhow!(
-                            "{}: KeepOnlyFields contains empty field_path",
-                            context
-                        ));
-                    }
+                    FieldUtils::validate_field_path(field_path).map_err(|error| {
+                        anyhow!(
+                            "{}: KeepOnlyFields contains invalid field_path: {}",
+                            context,
+                            error
+                        )
+                    })?;
                 }
             }
             Action::DropMessage | Action::PassThrough => {
@@ -958,5 +964,149 @@ mod tests {
             .expect("message is forwarded");
 
         assert_eq!(output.payload["computed"], json!(0.0));
+    }
+
+    #[test]
+    fn rule_condition_can_read_array_path() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: Condition {
+                    field_path: "readings[1].kind".to_string(),
+                    operation: "equals".to_string(),
+                    value: json!("target"),
+                },
+                actions: vec![Action::SetField {
+                    field_path: "matched".to_string(),
+                    value: json!(true),
+                }],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::Abort,
+        );
+
+        let output = processor
+            .process_message(Message::new(
+                "source",
+                "raw",
+                json!({
+                    "readings": [
+                        { "kind": "other" },
+                        { "kind": "target" }
+                    ]
+                }),
+            ))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["matched"], json!(true));
+    }
+
+    #[test]
+    fn rule_actions_can_mutate_array_paths() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("always"),
+                actions: vec![
+                    Action::SetField {
+                        field_path: "readings[0].status".to_string(),
+                        value: json!("ok"),
+                    },
+                    Action::CopyField {
+                        source_field: "readings[0].status".to_string(),
+                        target_field: "summary.first_status".to_string(),
+                    },
+                    Action::RemoveField {
+                        field_path: "readings[1].noise".to_string(),
+                    },
+                ],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::Abort,
+        );
+
+        let output = processor
+            .process_message(Message::new(
+                "source",
+                "raw",
+                json!({
+                    "readings": [
+                        {},
+                        { "noise": true, "value": 5 }
+                    ]
+                }),
+            ))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["readings"][0]["status"], json!("ok"));
+        assert_eq!(output.payload["summary"]["first_status"], json!("ok"));
+        assert!(output.payload["readings"][1].get("noise").is_none());
+    }
+
+    #[test]
+    fn keep_only_fields_can_preserve_array_paths() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("always"),
+                actions: vec![Action::KeepOnlyFields {
+                    field_paths: vec!["readings[1].value".to_string()],
+                }],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::Abort,
+        );
+
+        let output = processor
+            .process_message(Message::new(
+                "source",
+                "raw",
+                json!({
+                    "readings": [
+                        { "value": 1 },
+                        { "value": 2 }
+                    ],
+                    "ignored": true
+                }),
+            ))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["readings"][1]["value"], json!(2));
+        assert!(output.payload.get("ignored").is_none());
+    }
+
+    #[test]
+    fn rule_validation_rejects_malformed_field_path() {
+        let config = RuleConfig {
+            rules: vec![Rule {
+                condition: Condition {
+                    field_path: "readings[abc]".to_string(),
+                    operation: "equals".to_string(),
+                    value: json!(true),
+                },
+                actions: vec![Action::PassThrough],
+                else_actions: vec![],
+            }],
+            error_strategy: ErrorStrategy::Continue,
+            timing: None,
+        };
+
+        let error = config.validate().expect_err("malformed path is rejected");
+
+        assert!(error.to_string().contains("field_path"));
+    }
+
+    #[test]
+    fn expression_context_exposes_array_paths() {
+        let processor = processor_with(vec![], ErrorStrategy::Abort);
+
+        let result = processor
+            .evaluate_expression(
+                &json!({ "readings": [{ "value": 4 }] }),
+                "readings[0].value + 1",
+            )
+            .expect("array path is available to expressions");
+
+        assert_eq!(result, 5.0);
     }
 }

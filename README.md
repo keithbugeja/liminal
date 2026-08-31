@@ -139,6 +139,9 @@ Choose communication patterns between processing stages:
 
 The rule processor supports conditional transformations:
 
+Field paths use dot-separated object keys and array indexes, such as
+`device.id` or `readings[0].value`.
+
 ```toml
 [[pipelines.stage_name.parameters.rules]]
 condition = { field_path = "temperature", operation = ">", value = 25.0 }

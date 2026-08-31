@@ -561,7 +561,7 @@ fn condition_schema() -> SchemaSpec {
                 false,
                 None,
                 &[],
-                "Payload field path to evaluate. Not required for always or never.",
+                "Payload field path to evaluate, e.g. device.id or items[0].value. Not required for always or never.",
             ),
             field(
                 "operation",
@@ -612,7 +612,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "Payload field to set.",
+                        "Payload field to set, e.g. device.id or items[0].value.",
                     ),
                     field(
                         "value",
@@ -635,7 +635,7 @@ fn action_schema() -> SchemaSpec {
                     true,
                     None,
                     &[],
-                    "Payload field to remove.",
+                    "Payload field to remove, e.g. device.id or items[0].value.",
                 )],
             ),
             action_variant(
@@ -649,7 +649,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "Payload field to copy from.",
+                        "Payload field to copy from, e.g. device.id or items[0].value.",
                     ),
                     field(
                         "target_field",
@@ -658,7 +658,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "Payload field to copy into.",
+                        "Payload field to copy into, e.g. device.id or items[0].value.",
                     ),
                 ],
             ),
@@ -673,7 +673,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "Payload field to rename.",
+                        "Payload field to rename, e.g. device.id or items[0].value.",
                     ),
                     field(
                         "new_field",
@@ -682,7 +682,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "New payload field path.",
+                        "New payload field path, e.g. device.id or items[0].value.",
                     ),
                 ],
             ),
@@ -697,7 +697,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "Payload field to write.",
+                        "Payload field to write, e.g. device.id or items[0].value.",
                     ),
                     field(
                         "expression",
@@ -723,7 +723,7 @@ fn action_schema() -> SchemaSpec {
                         true,
                         None,
                         &[],
-                        "Payload fields to retain.",
+                        "Payload fields to retain, e.g. device.id or items[0].value.",
                     ),
                     SchemaSpec::Array {
                         item: Box::new(SchemaSpec::JsonValue),

@@ -5115,6 +5115,16 @@ function validateRules(
     const operation = condition.operation;
     const isUnconditional = operation === "always" || operation === "never";
 
+    if (!isUnconditional && typeof fieldPath === "string" && fieldPath.trim().length > 0) {
+      const pathIssue = validateFieldPath(fieldPath);
+      if (pathIssue) {
+        issues.push({
+          path: `${rulePath}.condition.field_path`,
+          message: `Rule ${ruleIndex + 1}: ${pathIssue}`,
+        });
+      }
+    }
+
     if (!isUnconditional && (typeof fieldPath !== "string" || fieldPath.trim().length === 0)) {
       issues.push({
         path: `${rulePath}.condition.field_path`,
@@ -5247,14 +5257,98 @@ function validateRuleFieldValue(
   }
 
   if (field.key === "field_paths" && Array.isArray(value)) {
-    const hasInvalidPath = value.some((item) => typeof item !== "string" || item.trim().length === 0);
-    if (hasInvalidPath) {
-      issues.push({
-        path,
-        message: `${label}: field paths must be non-empty strings.`,
-      });
+    for (const item of value) {
+      if (typeof item !== "string" || item.trim().length === 0) {
+        issues.push({
+          path,
+          message: `${label}: field paths must be non-empty strings.`,
+        });
+        return;
+      }
+
+      const pathIssue = validateFieldPath(item);
+      if (pathIssue) {
+        issues.push({
+          path,
+          message: `${label}: ${pathIssue}`,
+        });
+        return;
+      }
     }
   }
+
+  if (["field_path", "source_field", "target_field", "old_field", "new_field"].includes(field.key)) {
+    if (typeof value === "string" && value.trim().length > 0) {
+      const pathIssue = validateFieldPath(value);
+      if (pathIssue) {
+        issues.push({
+          path,
+          message: `${label}: ${pathIssue}`,
+        });
+      }
+    }
+  }
+}
+
+function validateFieldPath(fieldPath: string) {
+  if (fieldPath.trim().length === 0) {
+    return "field path is required.";
+  }
+
+  let index = 0;
+  let key = "";
+  let expectSegment = true;
+
+  while (index < fieldPath.length) {
+    const char = fieldPath[index];
+
+    if (char === ".") {
+      if (expectSegment) {
+        return "field path contains an empty segment.";
+      }
+      key = "";
+      expectSegment = true;
+      index += 1;
+      continue;
+    }
+
+    if (char === "[") {
+      key = "";
+      index += 1;
+      const start = index;
+
+      while (index < fieldPath.length && fieldPath[index] !== "]") {
+        index += 1;
+      }
+
+      if (index >= fieldPath.length) {
+        return "field path has an unclosed array index.";
+      }
+
+      const rawIndex = fieldPath.slice(start, index);
+      if (!/^\d+$/.test(rawIndex)) {
+        return "field path array indexes must be non-negative integers.";
+      }
+
+      expectSegment = false;
+      index += 1;
+
+      if (index < fieldPath.length && fieldPath[index] !== "." && fieldPath[index] !== "[") {
+        return "field path has unexpected text after an array index.";
+      }
+      continue;
+    }
+
+    key += char;
+    expectSegment = false;
+    index += 1;
+  }
+
+  if (expectSegment) {
+    return "field path cannot end with a dot.";
+  }
+
+  return null;
 }
 
 function isEmptyRequiredValue(value: JsonValue | undefined) {
