@@ -1,5 +1,5 @@
 use crate::config::ProcessorConfig;
-use crate::config::{StageConfig, extract_param};
+use crate::config::{StageConfig, defaulted_param, optional_param};
 use crate::core::context::ProcessingContext;
 use crate::processors::Processor;
 use crate::processors::common::MqttConnectionConfig;
@@ -20,17 +20,16 @@ pub struct MqttOutputConfig {
 
 impl ProcessorConfig for MqttOutputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
-        let connection = MqttConnectionConfig::from_parameters(&config.parameters, "liminal_out");
+        let connection = MqttConnectionConfig::from_parameters(&config.parameters, "liminal_out")?;
 
         // Extract topic mapping from config
         let topic_map: HashMap<String, String> =
-            extract_param(&config.parameters, "topic_map", HashMap::new());
+            defaulted_param(&config.parameters, "topic_map", HashMap::new())?;
 
         // Optional default topic for unmapped inputs
-        let default_topic: Option<String> =
-            extract_param(&config.parameters, "default_topic", None);
+        let default_topic: Option<String> = optional_param(&config.parameters, "default_topic")?;
 
-        let retain = extract_param(&config.parameters, "retain", false);
+        let retain = defaulted_param(&config.parameters, "retain", false)?;
 
         Ok(Self {
             connection,

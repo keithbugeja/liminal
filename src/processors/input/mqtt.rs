@@ -1,5 +1,5 @@
 use crate::config::{
-    FieldConfig, ProcessorConfig, StageConfig, extract_field_params, extract_param,
+    FieldConfig, ProcessorConfig, StageConfig, defaulted_param, extract_field_params,
 };
 use crate::core::context::ProcessingContext;
 use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
@@ -24,9 +24,9 @@ pub struct MqttInputConfig {
 
 impl ProcessorConfig for MqttInputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
-        let connection = MqttConnectionConfig::from_parameters(&config.parameters, "liminal");
+        let connection = MqttConnectionConfig::from_parameters(&config.parameters, "liminal")?;
         let topics: Vec<String> =
-            extract_param(&config.parameters, "topics", vec!["#".to_string()]);
+            defaulted_param(&config.parameters, "topics", vec!["#".to_string()])?;
 
         // |KB|Todo: Field configuration will be removed. Any payload parameter renaming should be handled by
         // a separate rename processor. Will be changing this to None in the future.

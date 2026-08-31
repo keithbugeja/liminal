@@ -1,5 +1,5 @@
 use crate::config::{
-    FieldConfig, ProcessorConfig, StageConfig, extract_field_params, extract_param,
+    FieldConfig, ProcessorConfig, StageConfig, defaulted_param, extract_field_params,
 };
 use crate::core::context::ProcessingContext;
 use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
@@ -24,10 +24,11 @@ pub struct SimulatedSignalConfig {
 impl ProcessorConfig for SimulatedSignalConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         // Extract simulation parameters with defaults
-        let interval_ms = extract_param(&config.parameters, "interval_ms", 1000);
-        let distribution = extract_param(&config.parameters, "distribution", "uniform".to_string());
-        let min_value = extract_param(&config.parameters, "min_value", 0.0);
-        let max_value = extract_param(&config.parameters, "max_value", 100.0);
+        let interval_ms = defaulted_param(&config.parameters, "interval_ms", 1000)?;
+        let distribution =
+            defaulted_param(&config.parameters, "distribution", "uniform".to_string())?;
+        let min_value = defaulted_param(&config.parameters, "min_value", 0.0)?;
+        let max_value = defaulted_param(&config.parameters, "max_value", 100.0)?;
 
         // Extract field configuration
         let field_config = extract_field_params(&config.parameters);
@@ -50,18 +51,27 @@ impl ProcessorConfig for SimulatedSignalConfig {
             timing: timing_config,
         };
 
-        // Validate the configuration
-        if config.validate().is_err() {
-            tracing::warn!(
-                "Invalid configuration for simulated signal stage: {:?}",
-                config
-            );
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    fn validate(&self) -> anyhow::Result<()> {
+        if self.interval_ms == 0 {
+            return Err(anyhow::anyhow!("interval_ms must be greater than 0"));
+        }
+
+        if self.min_value >= self.max_value {
+            return Err(anyhow::anyhow!("min_value must be less than max_value"));
+        }
+
+        if !matches!(self.distribution.as_str(), "uniform" | "normal") {
             return Err(anyhow::anyhow!(
-                "Invalid configuration for simulated signal stage"
+                "distribution must be 'uniform' or 'normal'"
             ));
         }
 
-        Ok(config)
+        Ok(())
     }
 }
 
@@ -181,5 +191,47 @@ impl WithTimingMixin for SimulatedSignalProcessor {
 
     fn timing_mixin_mut(&mut self) -> &mut TimingMixin {
         &mut self.timing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+
+    fn stage_config(parameters: HashMap<String, Value>) -> StageConfig {
+        StageConfig {
+            r#type: "simulated".to_string(),
+            inputs: None,
+            output: Some("raw".to_string()),
+            concurrency: None,
+            channel: None,
+            timing: None,
+            parameters: Some(parameters),
+        }
+    }
+
+    #[test]
+    fn simulated_rejects_invalid_parameter_type() {
+        let config = stage_config(HashMap::from([("interval_ms".to_string(), json!("fast"))]));
+
+        let error = SimulatedSignalConfig::from_stage_config(&config)
+            .expect_err("invalid interval type is rejected");
+
+        assert!(error.to_string().contains("interval_ms"));
+    }
+
+    #[test]
+    fn simulated_rejects_invalid_range() {
+        let config = stage_config(HashMap::from([
+            ("min_value".to_string(), json!(10.0)),
+            ("max_value".to_string(), json!(1.0)),
+        ]));
+
+        let error = SimulatedSignalConfig::from_stage_config(&config)
+            .expect_err("invalid range is rejected");
+
+        assert!(error.to_string().contains("min_value"));
     }
 }

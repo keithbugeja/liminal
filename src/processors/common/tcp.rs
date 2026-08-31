@@ -1,4 +1,4 @@
-use crate::config::{StageConfig, extract_param};
+use crate::config::{StageConfig, defaulted_param};
 use anyhow::anyhow;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -23,18 +23,19 @@ pub enum TcpMode {
 
 impl TcpConfig {
     pub fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
-        let mode_str: String = extract_param(&config.parameters, "mode", "client".to_string());
+        let mode_str: String = defaulted_param(&config.parameters, "mode", "client".to_string())?;
 
         let mode = match mode_str.as_str() {
             "client" => {
                 let host: String =
-                    extract_param(&config.parameters, "host", "localhost".to_string());
-                let port: u16 = extract_param(&config.parameters, "port", 8080);
+                    defaulted_param(&config.parameters, "host", "localhost".to_string())?;
+                let port: u16 = defaulted_param(&config.parameters, "port", 8080)?;
                 TcpMode::Client { host, port }
             }
             "server" => {
-                let host: String = extract_param(&config.parameters, "host", "0.0.0.0".to_string());
-                let port: u16 = extract_param(&config.parameters, "port", 8080);
+                let host: String =
+                    defaulted_param(&config.parameters, "host", "0.0.0.0".to_string())?;
+                let port: u16 = defaulted_param(&config.parameters, "port", 8080)?;
                 TcpMode::Server { host, port }
             }
             _ => {
@@ -45,14 +46,14 @@ impl TcpConfig {
             }
         };
 
-        let reconnect: bool = extract_param(&config.parameters, "reconnect", true);
+        let reconnect: bool = defaulted_param(&config.parameters, "reconnect", true)?;
         let reconnect_interval_ms: u64 =
-            extract_param(&config.parameters, "reconnect_interval_ms", 5000);
-        let max_frame_bytes: usize = extract_param(
+            defaulted_param(&config.parameters, "reconnect_interval_ms", 5000)?;
+        let max_frame_bytes: usize = defaulted_param(
             &config.parameters,
             "max_frame_bytes",
             DEFAULT_MAX_FRAME_BYTES,
-        );
+        )?;
 
         Ok(Self {
             mode,

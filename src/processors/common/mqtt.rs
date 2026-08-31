@@ -1,4 +1,4 @@
-use crate::config::extract_param;
+use crate::config::{defaulted_param, optional_param};
 use anyhow::Result;
 use rumqttc::{MqttOptions, QoS};
 use std::collections::HashMap;
@@ -19,26 +19,26 @@ impl MqttConnectionConfig {
     pub fn from_parameters(
         parameters: &Option<HashMap<String, serde_json::Value>>,
         _default_client_prefix: &str,
-    ) -> Self {
-        let broker_url = extract_param(
+    ) -> Result<Self> {
+        let broker_url = defaulted_param(
             parameters,
             "broker_url",
             "mqtt://localhost:1883".to_string(),
-        );
-        let client_id = extract_param(parameters, "client_id", None);
-        let qos = extract_param(parameters, "qos", 0);
-        let clean_session = extract_param(parameters, "clean_session", true);
-        let username = extract_param(parameters, "username", None);
-        let password = extract_param(parameters, "password", None);
+        )?;
+        let client_id = optional_param(parameters, "client_id")?;
+        let qos = defaulted_param(parameters, "qos", 0)?;
+        let clean_session = defaulted_param(parameters, "clean_session", true)?;
+        let username = optional_param(parameters, "username")?;
+        let password = optional_param(parameters, "password")?;
 
-        Self {
+        Ok(Self {
             broker_url,
             client_id,
             qos,
             clean_session,
             username,
             password,
-        }
+        })
     }
 
     /// Validate common MQTT connection parameters
@@ -99,5 +99,30 @@ impl MqttConnectionConfig {
         }
 
         Ok(mqttoptions)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn mqtt_qos_type_mismatch_is_rejected() {
+        let parameters = Some(HashMap::from([("qos".to_string(), json!("at_least_once"))]));
+        let error = MqttConnectionConfig::from_parameters(&parameters, "test")
+            .expect_err("qos type mismatch is rejected");
+
+        assert!(error.to_string().contains("qos"));
+    }
+
+    #[test]
+    fn mqtt_qos_range_is_rejected_by_validation() {
+        let parameters = Some(HashMap::from([("qos".to_string(), json!(3))]));
+        let config =
+            MqttConnectionConfig::from_parameters(&parameters, "test").expect("qos deserializes");
+        let error = config.validate().expect_err("qos range is rejected");
+
+        assert!(error.to_string().contains("QoS"));
     }
 }

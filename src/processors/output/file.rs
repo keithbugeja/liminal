@@ -4,7 +4,7 @@
 //! Supports JSON, CSV, and plain text output formats with automatic file
 //! creation and directory handling.
 
-use crate::config::params::extract_param;
+use crate::config::params::{defaulted_param, required_param};
 use crate::config::{ProcessorConfig, StageConfig};
 use crate::core::context::ProcessingContext;
 use crate::processors::Processor;
@@ -55,19 +55,16 @@ pub struct FileOutputConfig {
 impl ProcessorConfig for FileOutputConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         // Extract file path (required)
-        let file_path =
-            extract_param(&config.parameters, "file_path", None::<String>).ok_or_else(|| {
-                anyhow::anyhow!("file_path parameter is required for file output processor")
-            })?;
+        let file_path: String = required_param(&config.parameters, "file_path")?;
 
         let file_path = PathBuf::from(file_path);
 
         // Extract optional parameters with sensible defaults
-        let format = extract_param(&config.parameters, "format", OutputFormat::Json);
-        let append = extract_param(&config.parameters, "append", true);
-        let create_dirs = extract_param(&config.parameters, "create_dirs", true);
-        let buffer_size = extract_param(&config.parameters, "buffer_size", 8192_usize);
-        let auto_flush = extract_param(&config.parameters, "auto_flush", false);
+        let format = defaulted_param(&config.parameters, "format", OutputFormat::Json)?;
+        let append = defaulted_param(&config.parameters, "append", true)?;
+        let create_dirs = defaulted_param(&config.parameters, "create_dirs", true)?;
+        let buffer_size = defaulted_param(&config.parameters, "buffer_size", 8192_usize)?;
+        let auto_flush = defaulted_param(&config.parameters, "auto_flush", false)?;
 
         let config = Self {
             file_path,
@@ -326,5 +323,53 @@ impl Processor for FileOutputProcessor {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+    use std::collections::HashMap;
+
+    fn stage_config(parameters: Option<HashMap<String, Value>>) -> StageConfig {
+        StageConfig {
+            r#type: "file".to_string(),
+            inputs: Some(vec!["raw".to_string()]),
+            output: None,
+            concurrency: None,
+            channel: None,
+            timing: None,
+            parameters,
+        }
+    }
+
+    #[test]
+    fn file_output_requires_file_path() {
+        let error = FileOutputConfig::from_stage_config(&stage_config(Some(HashMap::new())))
+            .expect_err("missing file_path is rejected");
+
+        assert!(error.to_string().contains("file_path"));
+    }
+
+    #[test]
+    fn file_output_rejects_invalid_file_path_type() {
+        let config = stage_config(Some(HashMap::from([("file_path".to_string(), json!(42))])));
+        let error = FileOutputConfig::from_stage_config(&config)
+            .expect_err("invalid file_path type is rejected");
+
+        assert!(error.to_string().contains("file_path"));
+    }
+
+    #[test]
+    fn file_output_rejects_invalid_format() {
+        let config = stage_config(Some(HashMap::from([
+            ("file_path".to_string(), json!("out.jsonl")),
+            ("format".to_string(), json!("xml")),
+        ])));
+        let error =
+            FileOutputConfig::from_stage_config(&config).expect_err("invalid format is rejected");
+
+        assert!(error.to_string().contains("format"));
     }
 }

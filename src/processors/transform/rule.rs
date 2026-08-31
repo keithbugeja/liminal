@@ -1,4 +1,4 @@
-use crate::config::{ProcessorConfig, StageConfig};
+use crate::config::{ProcessorConfig, StageConfig, defaulted_param, required_param};
 use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
 use crate::core::{context::ProcessingContext, message::Message};
 use crate::processors::common::condition_utils::{ConditionEvaluator, ConditionOperation};
@@ -36,28 +36,18 @@ fn default_error_strategy() -> ErrorStrategy {
 
 impl ProcessorConfig for RuleConfig {
     fn from_stage_config(config: &StageConfig) -> Result<Self> {
-        let rules = match config
-            .parameters
-            .as_ref()
-            .and_then(|parameters| parameters.get("rules"))
-        {
-            Some(value) => serde_json::from_value::<Vec<Rule>>(value.clone())
-                .map_err(|error| anyhow!("invalid rules parameter: {}", error))?,
-            None => vec![],
-        };
+        let rules: Vec<Rule> = required_param(&config.parameters, "rules")
+            .map_err(|error| anyhow!("invalid rules parameter: {}", error))?;
         if rules.is_empty() {
             return Err(anyhow!("rule_transformer requires at least one rule"));
         }
 
-        let error_strategy = match config
-            .parameters
-            .as_ref()
-            .and_then(|parameters| parameters.get("error_strategy"))
-        {
-            Some(value) => serde_json::from_value::<ErrorStrategy>(value.clone())
-                .map_err(|error| anyhow!("invalid error_strategy parameter: {}", error))?,
-            None => default_error_strategy(),
-        };
+        let error_strategy: ErrorStrategy = defaulted_param(
+            &config.parameters,
+            "error_strategy",
+            default_error_strategy(),
+        )
+        .map_err(|error| anyhow!("invalid error_strategy parameter: {}", error))?;
 
         // Extract timing configuration
         let timing_config = config.timing.clone();
@@ -737,5 +727,58 @@ impl WithTimingMixin for RuleProcessor {
 
     fn timing_mixin_mut(&mut self) -> &mut TimingMixin {
         &mut self.timing
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::{Value, json};
+
+    fn stage_config(parameters: Option<HashMap<String, Value>>) -> StageConfig {
+        StageConfig {
+            r#type: "rule".to_string(),
+            inputs: Some(vec!["raw".to_string()]),
+            output: Some("filtered".to_string()),
+            concurrency: None,
+            channel: None,
+            timing: None,
+            parameters,
+        }
+    }
+
+    fn minimal_rule() -> Value {
+        json!({
+            "condition": {
+                "field_path": "value",
+                "operation": ">",
+                "value": 10
+            },
+            "actions": [
+                { "type": "pass_through" }
+            ],
+            "else_actions": []
+        })
+    }
+
+    #[test]
+    fn rule_config_requires_rules_parameter() {
+        let error = RuleConfig::from_stage_config(&stage_config(Some(HashMap::new())))
+            .expect_err("missing rules is rejected");
+
+        assert!(error.to_string().contains("rules"));
+    }
+
+    #[test]
+    fn rule_config_rejects_invalid_error_strategy() {
+        let config = stage_config(Some(HashMap::from([
+            ("rules".to_string(), json!([minimal_rule()])),
+            ("error_strategy".to_string(), json!("shrug")),
+        ])));
+
+        let error =
+            RuleConfig::from_stage_config(&config).expect_err("invalid error strategy is rejected");
+
+        assert!(error.to_string().contains("error_strategy"));
     }
 }

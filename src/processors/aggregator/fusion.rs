@@ -1,4 +1,4 @@
-use crate::config::{ProcessorConfig, StageConfig, extract_param};
+use crate::config::{ProcessorConfig, StageConfig, defaulted_param};
 use crate::core::context::ProcessingContext;
 use crate::core::message::Message;
 use crate::processors::Processor;
@@ -36,13 +36,13 @@ enum FusionConflictStrategy {
 impl ProcessorConfig for FusionConfig {
     fn from_stage_config(config: &StageConfig) -> anyhow::Result<Self> {
         let fusion_config = Self {
-            mode: extract_param(&config.parameters, "mode", FusionMode::MergeObjects),
-            conflict_strategy: extract_param(
+            mode: defaulted_param(&config.parameters, "mode", FusionMode::MergeObjects)?,
+            conflict_strategy: defaulted_param(
                 &config.parameters,
                 "conflict_strategy",
                 FusionConflictStrategy::Prefix,
-            ),
-            join_window_ms: extract_param(&config.parameters, "join_window_ms", 25),
+            )?,
+            join_window_ms: defaulted_param(&config.parameters, "join_window_ms", 25)?,
         };
 
         fusion_config.validate()?;
@@ -427,6 +427,28 @@ mod tests {
         let second_fused = output_receiver.recv().await.unwrap();
         assert_eq!(second_fused.payload["fast"]["value"], json!(2));
         assert_eq!(second_fused.payload["slow"]["value"], json!(10));
+    }
+
+    #[test]
+    fn fusion_rejects_invalid_mode() {
+        let mut parameters = HashMap::new();
+        parameters.insert("mode".to_string(), json!("zipper"));
+
+        let error = FusionConfig::from_stage_config(&fusion_stage_config(Some(parameters)))
+            .expect_err("invalid fusion mode is rejected");
+
+        assert!(error.to_string().contains("mode"));
+    }
+
+    #[test]
+    fn fusion_rejects_invalid_join_window_type() {
+        let mut parameters = HashMap::new();
+        parameters.insert("join_window_ms".to_string(), json!("soon"));
+
+        let error = FusionConfig::from_stage_config(&fusion_stage_config(Some(parameters)))
+            .expect_err("invalid join window type is rejected");
+
+        assert!(error.to_string().contains("join_window_ms"));
     }
 
     fn fusion_stage_config(parameters: Option<HashMap<String, Value>>) -> StageConfig {

@@ -37,6 +37,7 @@
 //! ```
 
 use crate::config::field::FieldConfig;
+use anyhow::{Context, anyhow};
 use std::collections::HashMap;
 
 /// Extracts a typed parameter from the stage configuration parameters.
@@ -113,6 +114,62 @@ where
         .and_then(|p| p.get(key))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or(default)
+}
+
+/// Extracts a required typed parameter from stage configuration parameters.
+///
+/// Missing parameters and type mismatches are returned as explicit errors. Use this
+/// for semantically required parameters where falling back would hide invalid TOML or
+/// GUI serialization bugs.
+pub fn required_param<T>(
+    params: &Option<HashMap<String, serde_json::Value>>,
+    key: &str,
+) -> anyhow::Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let value = params
+        .as_ref()
+        .and_then(|parameters| parameters.get(key))
+        .ok_or_else(|| anyhow!("missing required parameter '{}'", key))?;
+
+    serde_json::from_value(value.clone())
+        .with_context(|| format!("invalid value for required parameter '{}'", key))
+}
+
+/// Extracts an optional typed parameter from stage configuration parameters.
+///
+/// Missing parameters return `Ok(None)`. Present parameters that cannot be
+/// deserialised to the requested type return an error.
+pub fn optional_param<T>(
+    params: &Option<HashMap<String, serde_json::Value>>,
+    key: &str,
+) -> anyhow::Result<Option<T>>
+where
+    T: serde::de::DeserializeOwned,
+{
+    let Some(value) = params.as_ref().and_then(|parameters| parameters.get(key)) else {
+        return Ok(None);
+    };
+
+    serde_json::from_value(value.clone())
+        .map(Some)
+        .with_context(|| format!("invalid value for optional parameter '{}'", key))
+}
+
+/// Extracts a typed parameter with a default for missing values.
+///
+/// Missing parameters return the supplied default. Present parameters that cannot be
+/// deserialised to the requested type return an error.
+pub fn defaulted_param<T>(
+    params: &Option<HashMap<String, serde_json::Value>>,
+    key: &str,
+    default: T,
+) -> anyhow::Result<T>
+where
+    T: serde::de::DeserializeOwned,
+{
+    optional_param(params, key).map(|value| value.unwrap_or(default))
 }
 
 /// Extracts field mapping configuration from stage parameters.
@@ -260,4 +317,43 @@ pub fn extract_field_params(params: &Option<HashMap<String, serde_json::Value>>)
     }
 
     FieldConfig::None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn required_param_reports_missing_key() {
+        let error =
+            required_param::<String>(&Some(HashMap::new()), "file_path").expect_err("missing key");
+
+        assert!(error.to_string().contains("missing required parameter"));
+        assert!(error.to_string().contains("file_path"));
+    }
+
+    #[test]
+    fn optional_param_reports_invalid_type() {
+        let params = Some(HashMap::from([("qos".to_string(), json!("high"))]));
+        let error = optional_param::<u8>(&params, "qos").expect_err("invalid type");
+
+        assert!(error.to_string().contains("optional parameter 'qos'"));
+    }
+
+    #[test]
+    fn defaulted_param_allows_missing_but_rejects_invalid_type() {
+        let missing: u64 =
+            defaulted_param(&Some(HashMap::new()), "interval_ms", 1000).expect("missing defaults");
+        assert_eq!(missing, 1000);
+
+        let params = Some(HashMap::from([("interval_ms".to_string(), json!("fast"))]));
+        let error = defaulted_param::<u64>(&params, "interval_ms", 1000).expect_err("bad type");
+
+        assert!(
+            error
+                .to_string()
+                .contains("optional parameter 'interval_ms'")
+        );
+    }
 }

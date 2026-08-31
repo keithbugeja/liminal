@@ -12,6 +12,6 @@ pub use graph::ResolvedPipelineGraph;
 pub use traits::ProcessorConfig;
 
 pub use loader::load_config;
-pub use params::{extract_field_params, extract_param};
+pub use params::{defaulted_param, extract_field_params, optional_param, required_param};
 pub use types::{Config, StageConfig, TimingConfig};
 pub use validation::validate_config;
