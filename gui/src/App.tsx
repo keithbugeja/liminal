@@ -1,5 +1,4 @@
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
 import { ConfigBrowserPanel } from "./components/config-browser/ConfigBrowserPanel";
 import {
   connectionValidationMessage,
@@ -9,11 +8,7 @@ import {
   KeyValue,
 } from "./components/inspector/InspectorPrimitives";
 import { InspectorPanel } from "./components/inspector/InspectorPanel";
-import {
-  RuntimeLogEntry,
-  RuntimeLogStream,
-  RuntimeState,
-} from "./components/runtime-console/RuntimeConsole";
+import { useRuntimeLogs } from "./hooks/useRuntimeLogs";
 import {
   ReactFlowProvider,
 } from "@xyflow/react";
@@ -55,16 +50,6 @@ import {
   SaveState,
 } from "./types";
 
-type PipelineLogEvent = {
-  stream: RuntimeLogStream;
-  line: string;
-};
-
-type PipelineStateEvent = {
-  state: "idle" | "running" | "stopped" | "error";
-  message: string | null;
-};
-
 type DeleteImpact = {
   outputChannel: string | null;
   downstreamNodes: GraphNode[];
@@ -102,7 +87,6 @@ const fileSidebarCollapsedStorageKey = "liminal.fileSidebarCollapsed";
 const toolsSidebarCollapsedStorageKey = "liminal.toolsSidebarCollapsed";
 const inspectorCollapsedStorageKey = "liminal.inspectorCollapsed";
 const maxRecentConfigs = 6;
-const maxRuntimeLogs = 500;
 const defaultFileSidebarWidth = 320;
 const defaultToolsSidebarWidth = 330;
 const minFileSidebarWidth = 260;
@@ -128,9 +112,6 @@ function App() {
   const [filterText, setFilterText] = useState("");
   const [loadState, setLoadState] = useState<"idle" | "loading" | "error">("idle");
   const [saveState, setSaveState] = useState<SaveState>("idle");
-  const [runtimeState, setRuntimeState] = useState<RuntimeState>("idle");
-  const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLogEntry[]>([]);
-  const [runtimeLogFilter, setRuntimeLogFilter] = useState<"all" | "selection">("all");
   const [error, setError] = useState<string | null>(null);
   const [savedContent, setSavedContent] = useState<string | null>(null);
   const [draftContent, setDraftContent] = useState<string | null>(null);
@@ -162,12 +143,19 @@ function App() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   const isDirty = savedContent !== null && draftContent !== null && savedContent !== draftContent;
   const hasUnsavedDraft = saveState === "dirty" || isDirty;
-
-  const appendRuntimeLog = useCallback((stream: RuntimeLogStream, line: string) => {
-    setRuntimeLogs((logs) =>
-      [...logs, { id: Date.now() + Math.random(), stream, line }].slice(-maxRuntimeLogs),
-    );
-  }, []);
+  const {
+    runtimeState,
+    runtimeLogs,
+    runtimeLogFilter,
+    setRuntimeLogFilter,
+    startRuntime,
+    stopRuntime,
+    clearRuntimeLogs,
+  } = useRuntimeLogs({
+    configPath,
+    hasUnsavedDraft,
+    onError: setError,
+  });
 
   const applyDraftEdit = useCallback(
     (edit: DraftEditResult, selectedNodeId: string | null, selectedEdgeId: string | null = null) => {
@@ -456,76 +444,12 @@ function App() {
     invoke<ProcessorDescriptor[]>("list_processor_descriptors")
       .then(setProcessorDescriptors)
       .catch(() => setProcessorDescriptors([]));
-    invoke<string>("pipeline_runtime_state")
-      .then((state) => setRuntimeState(state === "running" ? "running" : "idle"))
-      .catch(() => setRuntimeState("idle"));
     loadGraph(initialConfigPath);
   }, [loadGraph]);
 
   useEffect(() => {
     void refreshWorkspaceConfigs(workspacePath);
   }, [refreshWorkspaceConfigs, workspacePath]);
-
-  useEffect(() => {
-    let disposed = false;
-    const unlistenLog = listen<PipelineLogEvent>("pipeline://log", (event) => {
-      if (!disposed) {
-        appendRuntimeLog(event.payload.stream, event.payload.line);
-      }
-    });
-    const unlistenState = listen<PipelineStateEvent>("pipeline://state", (event) => {
-      if (disposed) {
-        return;
-      }
-
-      setRuntimeState(event.payload.state === "running" ? "running" : "idle");
-      if (event.payload.message) {
-        appendRuntimeLog("system", event.payload.message);
-      }
-    });
-
-    return () => {
-      disposed = true;
-      void unlistenLog.then((unlisten) => unlisten());
-      void unlistenState.then((unlisten) => unlisten());
-    };
-  }, [appendRuntimeLog]);
-
-  const startRuntime = useCallback(async () => {
-    if (hasUnsavedDraft) {
-      setError("Save or revert the current draft before running the pipeline.");
-      appendRuntimeLog("system", "Run blocked: save or revert the current draft first.");
-      return;
-    }
-
-    setRuntimeState("starting");
-    setError(null);
-    setRuntimeLogs([]);
-    appendRuntimeLog("system", `Starting pipeline from ${configPath}`);
-
-    try {
-      await invoke("start_pipeline", { path: configPath });
-    } catch (caught) {
-      const message = String(caught);
-      setRuntimeState("error");
-      setError(message);
-      appendRuntimeLog("system", message);
-    }
-  }, [appendRuntimeLog, configPath, hasUnsavedDraft]);
-
-  const stopRuntime = useCallback(async () => {
-    setRuntimeState("stopping");
-    appendRuntimeLog("system", "Stopping pipeline...");
-
-    try {
-      await invoke("stop_pipeline");
-    } catch (caught) {
-      const message = String(caught);
-      setRuntimeState("error");
-      setError(message);
-      appendRuntimeLog("system", message);
-    }
-  }, [appendRuntimeLog]);
 
   const selectedRuntimeNode =
     selectedNodeId && graph ? graph.nodes.find((node) => node.id === selectedNodeId) ?? null : null;
@@ -1221,7 +1145,7 @@ function App() {
             selectedRuntimeNode={selectedRuntimeNode}
             selectedRuntimeChannelName={selectedChannelName}
             onRuntimeLogFilterChange={setRuntimeLogFilter}
-            onClearRuntimeLogs={() => setRuntimeLogs([])}
+            onClearRuntimeLogs={clearRuntimeLogs}
           />
         </main>
 
