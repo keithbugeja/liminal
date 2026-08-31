@@ -64,20 +64,22 @@ impl ProcessorConfig for RuleConfig {
         }
 
         for (i, rule) in self.rules.iter().enumerate() {
-            if rule.condition.field_path.is_empty() {
-                return Err(anyhow!("Rule {} has empty field_path", i));
-            }
             if rule.condition.operation.is_empty() {
                 return Err(anyhow!("Rule {} has empty operation", i));
             }
 
             // Validate operation is supported
-            if ConditionOperation::from_str(&rule.condition.operation).is_none() {
-                return Err(anyhow!(
-                    "Rule {} has unsupported operation: '{}'",
-                    i,
-                    rule.condition.operation
-                ));
+            let operation =
+                ConditionOperation::from_str(&rule.condition.operation).ok_or_else(|| {
+                    anyhow!(
+                        "Rule {} has unsupported operation: '{}'",
+                        i,
+                        rule.condition.operation
+                    )
+                })?;
+
+            if !operation.is_unconditional() && rule.condition.field_path.is_empty() {
+                return Err(anyhow!("Rule {} has empty field_path", i));
             }
 
             if rule.actions.is_empty() {
@@ -187,8 +189,10 @@ pub struct Rule {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Condition {
+    #[serde(default)]
     pub field_path: String,
     pub operation: String,
+    #[serde(default)]
     pub value: Value,
 }
 
@@ -222,14 +226,11 @@ pub enum Action {
     KeepOnlyFields { field_paths: Vec<String> },
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, PartialOrd)]
 enum ActionPriority {
-    PreCompute = 1, // ComputeField (pre-computation phase)
-    Reset = 2,      // KeepOnlyFields (destructive reset)
-    Transform = 3,  // SetField, CopyField, RenameField, RemoveField
-    Finalize = 4,   // ComputeField (final computation phase)
-    Control = 5,    // DropMessage, PassThrough
+    Reset = 1,     // KeepOnlyFields (destructive reset)
+    Transform = 2, // SetField, CopyField, RenameField, RemoveField, ComputeField assignment
+    Control = 3,   // DropMessage, PassThrough
 }
 
 impl Action {
@@ -269,19 +270,22 @@ impl RuleProcessor {
     }
 
     fn evaluate_condition(&self, payload: &Value, condition: &Condition) -> bool {
-        let field_value = match FieldUtils::extract_field_value(payload, &condition.field_path) {
-            Some(value) => value,
-            None => {
-                debug!("Field '{}' not found in payload", condition.field_path);
-                return false;
-            }
-        };
-
-        // Parse the operation string to ConditionOperation enum
         let operation = match ConditionOperation::from_str(&condition.operation) {
             Some(op) => op,
             None => {
                 warn!("Unknown condition operation: {}", condition.operation);
+                return false;
+            }
+        };
+
+        if operation.is_unconditional() {
+            return ConditionEvaluator::evaluate_condition(&Value::Null, &operation, &Value::Null);
+        }
+
+        let field_value = match FieldUtils::extract_field_value(payload, &condition.field_path) {
+            Some(value) => value,
+            None => {
+                debug!("Field '{}' not found in payload", condition.field_path);
                 return false;
             }
         };
@@ -371,7 +375,7 @@ impl RuleProcessor {
     }
 
     fn handle_action_error(&self, error: anyhow::Error, action: &Action) -> Result<()> {
-        match self.config.error_strategy {
+        match &self.config.error_strategy {
             ErrorStrategy::Continue => {
                 error!("Action {:?} failed: {} (continuing)", action, error);
                 Ok(())
@@ -389,8 +393,6 @@ impl RuleProcessor {
                     "Action {:?} failed: {} (using default behavior)",
                     action, error
                 );
-                // |KB|Todo: For now, this is the same as Continue, but could
-                // be enhanced to provide default values for specific action types
                 Ok(())
             }
         }
@@ -527,37 +529,45 @@ impl RuleProcessor {
         let mut should_drop = false;
 
         for rule in &self.config.rules {
+            let matched;
+            let active_actions;
+
             if self.evaluate_condition(&message.payload, &rule.condition) {
                 debug!("Rule condition matched for message from {}", message.source);
-
-                if let Err(e) = self.execute_actions(&mut message.payload, &rule.actions) {
-                    error!("Failed to execute actions: {}", e);
-                }
-
-                // Check if any action was a drop message
-                for action in &rule.actions {
-                    if matches!(action, Action::DropMessage) {
-                        should_drop = true;
-                        break;
-                    }
-                }
+                matched = true;
+                active_actions = &rule.actions;
             } else if !rule.else_actions.is_empty() {
                 debug!(
                     "Rule condition not matched, executing else_actions for message from {}",
                     message.source
                 );
+                matched = false;
+                active_actions = &rule.else_actions;
+            } else {
+                continue;
+            }
 
-                if let Err(e) = self.execute_actions(&mut message.payload, &rule.else_actions) {
-                    error!("Failed to execute else_actions: {}", e);
-                }
-
-                // Check if any else_action was a drop message
-                for action in &rule.else_actions {
-                    if matches!(action, Action::DropMessage) {
-                        should_drop = true;
-                        break;
+            if let Err(e) = self.execute_actions(&mut message.payload, active_actions) {
+                match &self.config.error_strategy {
+                    ErrorStrategy::Abort => {
+                        error!("Aborting current message after action failure: {}", e);
+                        return Ok(None);
+                    }
+                    _ => {
+                        error!("Failed to execute rule actions: {}", e);
                     }
                 }
+            }
+
+            if active_actions
+                .iter()
+                .any(|action| matches!(action, Action::DropMessage))
+            {
+                should_drop = true;
+                debug!(
+                    "Rule {} branch requested message drop",
+                    if matched { "action" } else { "else_action" }
+                );
             }
 
             if should_drop {
@@ -595,11 +605,18 @@ impl RuleProcessor {
                             debug!("Pre-computed '{}' = {}", field_path, result);
                         }
                         Err(e) => {
-                            error!(
+                            let error = anyhow!(
                                 "Failed to pre-compute field '{}' with expression '{}': {}",
-                                field_path, expression, e
+                                field_path,
+                                expression,
+                                e
                             );
-                            computed_values.insert(field_path.clone(), 0.0); // Fallback value
+
+                            self.handle_action_error(error, action)?;
+
+                            if matches!(&self.config.error_strategy, ErrorStrategy::UseDefault) {
+                                computed_values.insert(field_path.clone(), 0.0);
+                            }
                         }
                     }
                 }
@@ -631,6 +648,11 @@ impl RuleProcessor {
                                 Number::from_f64(*computed_value).unwrap_or(Number::from(0)),
                             ),
                         )?;
+                    } else {
+                        debug!(
+                            "Skipping compute_field '{}' after pre-compute failure",
+                            field_path
+                        );
                     }
                 }
                 Action::KeepOnlyFields { field_paths } => {
@@ -761,6 +783,26 @@ mod tests {
         })
     }
 
+    fn processor_with(rules: Vec<Rule>, error_strategy: ErrorStrategy) -> RuleProcessor {
+        RuleProcessor {
+            name: "rule_test".to_string(),
+            config: RuleConfig {
+                rules,
+                error_strategy,
+                timing: None,
+            },
+            timing: TimingMixin::new(None),
+        }
+    }
+
+    fn condition(operation: &str) -> Condition {
+        Condition {
+            field_path: String::new(),
+            operation: operation.to_string(),
+            value: Value::Null,
+        }
+    }
+
     #[test]
     fn rule_config_requires_rules_parameter() {
         let error = RuleConfig::from_stage_config(&stage_config(Some(HashMap::new())))
@@ -780,5 +822,141 @@ mod tests {
             RuleConfig::from_stage_config(&config).expect_err("invalid error strategy is rejected");
 
         assert!(error.to_string().contains("error_strategy"));
+    }
+
+    #[test]
+    fn always_condition_runs_actions_without_field_path() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("always"),
+                actions: vec![Action::SetField {
+                    field_path: "status".to_string(),
+                    value: json!("seen"),
+                }],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::Abort,
+        );
+
+        let output = processor
+            .process_message(Message::new("source", "raw", json!({})))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["status"], json!("seen"));
+    }
+
+    #[test]
+    fn never_condition_runs_else_actions_without_field_path() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("never"),
+                actions: vec![Action::SetField {
+                    field_path: "status".to_string(),
+                    value: json!("action"),
+                }],
+                else_actions: vec![Action::SetField {
+                    field_path: "status".to_string(),
+                    value: json!("else"),
+                }],
+            }],
+            ErrorStrategy::Abort,
+        );
+
+        let output = processor
+            .process_message(Message::new("source", "raw", json!({})))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["status"], json!("else"));
+    }
+
+    #[test]
+    fn ordinary_condition_requires_field_path() {
+        let config = RuleConfig {
+            rules: vec![Rule {
+                condition: Condition {
+                    field_path: String::new(),
+                    operation: "equals".to_string(),
+                    value: json!(true),
+                },
+                actions: vec![Action::PassThrough],
+                else_actions: vec![],
+            }],
+            error_strategy: ErrorStrategy::Continue,
+            timing: None,
+        };
+
+        let error = config
+            .validate()
+            .expect_err("missing field path is rejected");
+
+        assert!(error.to_string().contains("field_path"));
+    }
+
+    #[test]
+    fn abort_strategy_drops_current_message_on_action_error() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("always"),
+                actions: vec![Action::CopyField {
+                    source_field: "missing".to_string(),
+                    target_field: "copied".to_string(),
+                }],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::Abort,
+        );
+
+        let output = processor
+            .process_message(Message::new("source", "raw", json!({"kept": true})))
+            .expect("abort is contained to the current message");
+
+        assert!(output.is_none());
+    }
+
+    #[test]
+    fn continue_strategy_keeps_message_after_action_error() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("always"),
+                actions: vec![Action::CopyField {
+                    source_field: "missing".to_string(),
+                    target_field: "copied".to_string(),
+                }],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::Continue,
+        );
+
+        let output = processor
+            .process_message(Message::new("source", "raw", json!({"kept": true})))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["kept"], json!(true));
+        assert!(output.payload.get("copied").is_none());
+    }
+
+    #[test]
+    fn use_default_strategy_sets_failed_compute_to_zero() {
+        let processor = processor_with(
+            vec![Rule {
+                condition: condition("always"),
+                actions: vec![Action::ComputeField {
+                    field_path: "computed".to_string(),
+                    expression: "missing + 1".to_string(),
+                }],
+                else_actions: vec![],
+            }],
+            ErrorStrategy::UseDefault,
+        );
+
+        let output = processor
+            .process_message(Message::new("source", "raw", json!({})))
+            .expect("message processes")
+            .expect("message is forwarded");
+
+        assert_eq!(output.payload["computed"], json!(0.0));
     }
 }

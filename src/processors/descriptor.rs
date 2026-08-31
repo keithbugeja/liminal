@@ -428,16 +428,6 @@ fn field(
     }
 }
 
-fn field_with_status(
-    mut field: FieldSpec,
-    status: FieldStatus,
-    status_note: &'static str,
-) -> FieldSpec {
-    field.status = status;
-    field.status_note = Some(status_note.to_string());
-    field
-}
-
 fn field_with_schema(
     mut field: FieldSpec,
     schema: SchemaSpec,
@@ -457,7 +447,7 @@ fn rule_fields() -> Vec<FieldSpec> {
                 FieldKind::Array,
                 true,
                 Some(
-                    "[{ condition = { field_path = \"value\", operation = \">=\", value = 0 }, actions = [{ type = \"pass_through\" }], else_actions = [] }]",
+                    "[{ condition = { operation = \"always\" }, actions = [{ type = \"pass_through\" }], else_actions = [] }]",
                 ),
                 &[],
                 "Ordered rule list with conditions, actions, and else actions.",
@@ -467,18 +457,14 @@ fn rule_fields() -> Vec<FieldSpec> {
             },
             Some("rule_builder"),
         ),
-        field_with_status(
-            field(
-                "error_strategy",
-                "Error strategy",
-                FieldKind::Enum,
-                false,
-                Some("continue"),
-                &["continue", "skip", "abort", "use_default"],
-                "Behavior when a rule action fails.",
-            ),
-            FieldStatus::Experimental,
-            "Rule error strategy semantics are being clarified in audit Pass 7.",
+        field(
+            "error_strategy",
+            "Error strategy",
+            FieldKind::Enum,
+            false,
+            Some("continue"),
+            &["continue", "skip", "abort", "use_default"],
+            "Behavior when a rule action fails.",
         ),
     ]
 }
@@ -572,10 +558,10 @@ fn condition_schema() -> SchemaSpec {
                 "field_path",
                 "Field path",
                 FieldKind::String,
-                true,
+                false,
                 None,
                 &[],
-                "Payload field path to evaluate.",
+                "Payload field path to evaluate. Not required for always or never.",
             ),
             field(
                 "operation",
@@ -584,6 +570,8 @@ fn condition_schema() -> SchemaSpec {
                 true,
                 Some("equals"),
                 &[
+                    "always",
+                    "never",
                     "equals",
                     "not_equals",
                     "startswith",
@@ -594,16 +582,16 @@ fn condition_schema() -> SchemaSpec {
                     "<",
                     "<=",
                 ],
-                "Comparison operation.",
+                "Comparison operation. Always runs actions; never runs else actions.",
             ),
             field(
                 "value",
                 "Value",
                 FieldKind::JsonValue,
-                true,
+                false,
                 None,
                 &[],
-                "Expected JSON value.",
+                "Expected JSON value. Not required for always or never.",
             ),
         ],
     }
@@ -867,8 +855,8 @@ mod tests {
         assert!(rules.required);
         assert_eq!(rules.status, FieldStatus::Stable);
         assert_eq!(error_strategy.kind, FieldKind::Enum);
-        assert_eq!(error_strategy.status, FieldStatus::Experimental);
-        assert!(error_strategy.status_note.is_some());
+        assert_eq!(error_strategy.status, FieldStatus::Stable);
+        assert!(error_strategy.status_note.is_none());
         assert_eq!(
             error_strategy.options,
             vec!["continue", "skip", "abort", "use_default"]
@@ -900,6 +888,34 @@ mod tests {
         assert!(fields.iter().any(|field| field.key == "condition"));
         assert!(fields.iter().any(|field| field.key == "actions"));
         assert!(fields.iter().any(|field| field.key == "else_actions"));
+
+        let condition = fields
+            .iter()
+            .find(|field| field.key == "condition")
+            .expect("condition field exists");
+        let Some(SchemaSpec::Object {
+            fields: condition_fields,
+        }) = &condition.schema
+        else {
+            panic!("condition has an object schema");
+        };
+        let operation = condition_fields
+            .iter()
+            .find(|field| field.key == "operation")
+            .expect("operation field exists");
+        let field_path = condition_fields
+            .iter()
+            .find(|field| field.key == "field_path")
+            .expect("field_path field exists");
+        let value = condition_fields
+            .iter()
+            .find(|field| field.key == "value")
+            .expect("value field exists");
+
+        assert!(operation.options.contains(&"always".to_string()));
+        assert!(operation.options.contains(&"never".to_string()));
+        assert!(!field_path.required);
+        assert!(!value.required);
 
         let actions = fields
             .iter()

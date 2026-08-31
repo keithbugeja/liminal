@@ -29,7 +29,7 @@ inputs = ["hf"]
 output = "mult_by_2_data"
 
 [pipelines.default_pipeline.stages.mult_by_2.parameters ]
-rules = [{ actions = [{ expression = "value *2", field_path = "twice", type = "compute_field" }], condition = { field_path = "value", operation = "not_equals", value = -1 }, else_actions = [] }, { actions = [{ field_paths = ["twice"], type = "keep_only_fields" }], condition = { field_path = "value", operation = "not_equals", value = -1 }, else_actions = [] }]
+rules = [{ actions = [{ expression = "value *2", field_path = "twice", type = "compute_field" }], condition = { field_path = "value", operation = "always", value = -1 }, else_actions = [] }, { actions = [{ field_paths = ["twice"], type = "keep_only_fields" }], condition = { field_path = "value", operation = "always", value = -1 }, else_actions = [] }]
 error_strategy = "continue" 
 
 [outputs]

@@ -308,6 +308,8 @@ const toolsSidebarCollapsedStorageKey = "liminal.toolsSidebarCollapsed";
 const inspectorCollapsedStorageKey = "liminal.inspectorCollapsed";
 const maxRecentConfigs = 6;
 const conditionOperationOptions = [
+  "always",
+  "never",
   "equals",
   "not_equals",
   "startswith",
@@ -2845,6 +2847,8 @@ function RuleCard({
   const condition = isJsonObject(ruleObject.condition) ? ruleObject.condition : {};
   const actions = Array.isArray(ruleObject.actions) ? ruleObject.actions : [];
   const elseActions = Array.isArray(ruleObject.else_actions) ? ruleObject.else_actions : [];
+  const operation = typeof condition.operation === "string" ? condition.operation : "equals";
+  const isUnconditional = operation === "always" || operation === "never";
 
   return (
     <div className="rule-card">
@@ -2877,31 +2881,35 @@ function RuleCard({
       </div>
 
       <div className="rule-condition">
-        <RuleInput
-          label="Field"
-          value={formatJsonValue(condition.field_path ?? "")}
-          issue={issueForPath(issues, `condition.field_path`)}
-          onChange={(nextValue) =>
-            onChange(setObjectValue(ruleObject, ["condition", "field_path"], nextValue))
-          }
-        />
         <RuleSelect
           label="Operation"
-          value={typeof condition.operation === "string" ? condition.operation : "equals"}
+          value={operation}
           options={conditionOperationOptions}
           issue={issueForPath(issues, `condition.operation`)}
           onChange={(nextValue) =>
             onChange(setObjectValue(ruleObject, ["condition", "operation"], nextValue))
           }
         />
-        <RuleInput
-          label="Value"
-          value={formatJsonValue(condition.value ?? "")}
-          issue={issueForPath(issues, `condition.value`)}
-          onChange={(nextValue) =>
-            onChange(setObjectValue(ruleObject, ["condition", "value"], parseJsonLikeValue(nextValue)))
-          }
-        />
+        {!isUnconditional && (
+          <>
+            <RuleInput
+              label="Field"
+              value={formatJsonValue(condition.field_path ?? "")}
+              issue={issueForPath(issues, `condition.field_path`)}
+              onChange={(nextValue) =>
+                onChange(setObjectValue(ruleObject, ["condition", "field_path"], nextValue))
+              }
+            />
+            <RuleInput
+              label="Value"
+              value={formatJsonValue(condition.value ?? "")}
+              issue={issueForPath(issues, `condition.value`)}
+              onChange={(nextValue) =>
+                onChange(setObjectValue(ruleObject, ["condition", "value"], parseJsonLikeValue(nextValue)))
+              }
+            />
+          </>
+        )}
       </div>
 
       <RuleActionList
@@ -5105,8 +5113,9 @@ function validateRules(
     const elseActions = Array.isArray(ruleObject.else_actions) ? ruleObject.else_actions : [];
     const fieldPath = condition.field_path;
     const operation = condition.operation;
+    const isUnconditional = operation === "always" || operation === "never";
 
-    if (typeof fieldPath !== "string" || fieldPath.trim().length === 0) {
+    if (!isUnconditional && (typeof fieldPath !== "string" || fieldPath.trim().length === 0)) {
       issues.push({
         path: `${rulePath}.condition.field_path`,
         message: `Rule ${ruleIndex + 1}: field path is required.`,
@@ -5326,8 +5335,8 @@ function defaultRule(actionSchema: Extract<SchemaSpec, { kind: "tagged_union" }>
   return {
     condition: {
       field_path: "",
-      operation: "equals",
-      value: "",
+      operation: "always",
+      value: null,
     },
     actions: actionSchema ? [defaultActionForVariant(actionSchema, actionSchema.variants[0]?.tag_value ?? "")] : [],
     else_actions: [],
@@ -5400,10 +5409,18 @@ function setObjectValue(
 }
 
 function ruleSummary(condition: { [key: string]: JsonValue }, actionCount: number, elseActionCount: number) {
-  const fieldPath = formatJsonValue(condition.field_path ?? "condition");
   const operation = formatJsonValue(condition.operation ?? "matches");
+  const fieldPath = formatJsonValue(condition.field_path ?? "condition");
   const actionLabel = actionCount === 1 ? "action" : "actions";
   const elseActionLabel = elseActionCount === 1 ? "else action" : "else actions";
+
+  if (operation === "always") {
+    return `Always, ${actionCount} ${actionLabel}, ${elseActionCount} ${elseActionLabel}`;
+  }
+
+  if (operation === "never") {
+    return `Never, ${actionCount} ${actionLabel}, ${elseActionCount} ${elseActionLabel}`;
+  }
 
   return `If ${fieldPath} ${operation}, ${actionCount} ${actionLabel}, ${elseActionCount} ${elseActionLabel}`;
 }

@@ -3,6 +3,8 @@ use serde_json::Value;
 /// Condition operations supported by processors
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConditionOperation {
+    Always,
+    Never,
     Equals,
     NotEquals,
     StartsWith,
@@ -18,6 +20,8 @@ impl ConditionOperation {
     /// Parse a condition operation from string
     pub fn from_str(s: &str) -> Option<Self> {
         match s {
+            "always" => Some(Self::Always),
+            "never" => Some(Self::Never),
             "equals" | "==" => Some(Self::Equals),
             "not_equals" | "!=" => Some(Self::NotEquals),
             "startswith" => Some(Self::StartsWith),
@@ -34,6 +38,8 @@ impl ConditionOperation {
     /// Convert to string representation
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Always => "always",
+            Self::Never => "never",
             Self::Equals => "equals",
             Self::NotEquals => "not_equals",
             Self::StartsWith => "startswith",
@@ -44,6 +50,10 @@ impl ConditionOperation {
             Self::LessThan => "<",
             Self::LessThanOrEqual => "<=",
         }
+    }
+
+    pub fn is_unconditional(&self) -> bool {
+        matches!(self, Self::Always | Self::Never)
     }
 }
 
@@ -63,6 +73,8 @@ impl ConditionEvaluator {
         expected_value: &Value,
     ) -> bool {
         match operation {
+            ConditionOperation::Always => true,
+            ConditionOperation::Never => false,
             ConditionOperation::Equals => field_value == expected_value,
             ConditionOperation::NotEquals => field_value != expected_value,
 
