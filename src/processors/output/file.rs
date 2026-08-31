@@ -7,6 +7,7 @@
 use crate::config::params::{defaulted_param, required_param};
 use crate::config::{ProcessorConfig, StageConfig};
 use crate::core::context::ProcessingContext;
+use crate::core::input_poll::{DEFAULT_MAX_DRAIN_PER_INPUT, drain_bounded_each, idle_sleep};
 use crate::processors::Processor;
 
 use async_trait::async_trait;
@@ -292,22 +293,21 @@ impl Processor for FileOutputProcessor {
 
         let mut messages_written = 0;
 
-        // Process messages from all input channels
-        for (channel_name, input) in context.inputs.iter_mut() {
-            while let Some(message) = input.try_recv().await {
-                let payload = message.payload;
+        for input_message in
+            drain_bounded_each(&mut context.inputs, DEFAULT_MAX_DRAIN_PER_INPUT).await
+        {
+            let payload = input_message.message.payload;
 
-                self.write_message(channel_name, &payload)
-                    .await
-                    .map_err(|e| {
-                        anyhow::anyhow!(
-                            "Failed to write message from channel '{}': {}",
-                            channel_name,
-                            e
-                        )
-                    })?;
-                messages_written += 1;
-            }
+            self.write_message(&input_message.input_name, &payload)
+                .await
+                .map_err(|e| {
+                    anyhow::anyhow!(
+                        "Failed to write message from channel '{}': {}",
+                        input_message.input_name,
+                        e
+                    )
+                })?;
+            messages_written += 1;
         }
 
         // Flush periodically even if auto_flush is disabled
@@ -319,7 +319,7 @@ impl Processor for FileOutputProcessor {
 
         // Small delay to prevent busy-waiting when no messages
         if messages_written == 0 {
-            tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+            idle_sleep().await;
         }
 
         Ok(())

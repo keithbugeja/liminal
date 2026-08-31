@@ -1,5 +1,6 @@
 use crate::config::StageConfig;
 use crate::core::context::ProcessingContext;
+use crate::core::input_poll::{idle_sleep, try_one_each};
 use crate::processors::Processor;
 
 use async_trait::async_trait;
@@ -29,23 +30,25 @@ impl Processor for ConsoleOutputProcessor {
             return Ok(());
         }
 
-        for (name, input) in context.inputs.iter_mut() {
-            if let Some(message) = input.try_recv().await {
-                tracing::info!(
-                    "'{}' => Message(source: {}, topic: {}, event_time: {:?}, ingestion_time: {:?}, sequence_id: {:?}, payload: {:?})",
-                    name,
-                    message.source,
-                    message.topic,
-                    message.timing.event_time,
-                    message.timing.ingestion_time,
-                    message.timing.sequence_id,
-                    message.payload
-                );
-            }
+        let messages = try_one_each(&mut context.inputs).await;
+
+        for input_message in &messages {
+            tracing::info!(
+                "'{}' => Message(source: {}, topic: {}, event_time: {:?}, ingestion_time: {:?}, sequence_id: {:?}, payload: {:?})",
+                input_message.input_name,
+                input_message.message.source,
+                input_message.message.topic,
+                input_message.message.timing.event_time,
+                input_message.message.timing.ingestion_time,
+                input_message.message.timing.sequence_id,
+                input_message.message.payload
+            );
         }
 
         // Small delay to prevent busy-waiting
-        tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+        if messages.is_empty() {
+            idle_sleep().await;
+        }
 
         Ok(())
     }

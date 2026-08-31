@@ -1,5 +1,6 @@
 use crate::config::{ProcessorConfig, StageConfig, defaulted_param};
 use crate::core::context::ProcessingContext;
+use crate::core::input_poll::{idle_sleep, latest_each};
 use crate::core::message::Message;
 use crate::processors::Processor;
 
@@ -91,7 +92,7 @@ impl Processor for FusionStage {
 
     async fn process(&mut self, context: &mut ProcessingContext) -> anyhow::Result<()> {
         if context.inputs.is_empty() {
-            sleep(Duration::from_millis(10)).await;
+            idle_sleep().await;
             return Ok(());
         }
 
@@ -101,7 +102,7 @@ impl Processor for FusionStage {
 
         let mut messages = drain_latest_ready_inputs(context).await;
         if messages.is_empty() {
-            sleep(Duration::from_millis(10)).await;
+            idle_sleep().await;
             return Ok(());
         }
 
@@ -135,7 +136,7 @@ impl FusionStage {
     ) -> anyhow::Result<()> {
         let messages = drain_latest_ready_inputs(context).await;
         if messages.is_empty() {
-            sleep(Duration::from_millis(10)).await;
+            idle_sleep().await;
             return Ok(());
         }
 
@@ -177,23 +178,11 @@ impl FusionStage {
 }
 
 async fn drain_latest_ready_inputs(context: &mut ProcessingContext) -> Vec<(String, Message)> {
-    let mut messages = Vec::new();
-
-    for (input_name, input) in context.inputs.iter_mut() {
-        let mut latest_message = None;
-        for _ in 0..MAX_MESSAGES_DRAINED_PER_INPUT {
-            let Some(message) = input.try_recv().await else {
-                break;
-            };
-            latest_message = Some(message);
-        }
-
-        if let Some(message) = latest_message {
-            messages.push((input_name.clone(), message));
-        }
-    }
-
-    messages
+    latest_each(&mut context.inputs, MAX_MESSAGES_DRAINED_PER_INPUT)
+        .await
+        .into_iter()
+        .map(|input_message| (input_message.input_name, input_message.message))
+        .collect()
 }
 
 fn fuse_payloads(messages: Vec<(String, Message)>, config: &FusionConfig) -> Value {

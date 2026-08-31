@@ -1,6 +1,7 @@
 use crate::config::ProcessorConfig;
 use crate::config::{StageConfig, defaulted_param, optional_param};
 use crate::core::context::ProcessingContext;
+use crate::core::input_poll::{DEFAULT_MAX_DRAIN_PER_INPUT, drain_bounded_each, idle_sleep};
 use crate::processors::Processor;
 use crate::processors::common::MqttConnectionConfig;
 
@@ -8,7 +9,6 @@ use async_trait::async_trait;
 use rumqttc::AsyncClient;
 use serde_json::Value;
 use std::collections::HashMap;
-use tokio::select;
 
 #[derive(Debug, Clone)]
 pub struct MqttOutputConfig {
@@ -138,46 +138,42 @@ impl Processor for MqttOutputProcessor {
         if let Some(ref client) = self.client {
             let mut messages_published = 0;
 
-            // Process all input channels
-            for (channel_name, input) in context.inputs.iter_mut() {
-                select! {
-                    message = input.recv() => {
-                        if let Some(message) = message {
-                            // Resolve topic using channel name
-                            if let Some(topic) = self.resolve_topic(channel_name) {
-                                // Format payload as JSON string
-                                let payload_str = self.format_payload(&message.payload)?;
+            for input_message in
+                drain_bounded_each(&mut context.inputs, DEFAULT_MAX_DRAIN_PER_INPUT).await
+            {
+                if let Some(topic) = self.resolve_topic(&input_message.input_name) {
+                    let payload_str = self.format_payload(&input_message.message.payload)?;
 
-                                // Publish to MQTT broker
-                                if let Err(e) = client.publish(
-                                    topic,
-                                    self.config.connection.qos(),
-                                    self.config.retain,
-                                    payload_str.as_bytes()
-                                ).await {
-                                    tracing::error!("Failed to publish to MQTT topic '{}': {:?}", topic, e);
-                                } else {
-                                    tracing::debug!(
-                                        "Published message from '{}' to MQTT topic: {} (payload: {})",
-                                        channel_name, topic, payload_str
-                                    );
-                                    messages_published += 1;
-                                }
-                            } else {
-                                tracing::warn!("No topic mapping found for input channel: {}", channel_name);
-                            }
-                        }
+                    if let Err(e) = client
+                        .publish(
+                            topic,
+                            self.config.connection.qos(),
+                            self.config.retain,
+                            payload_str.as_bytes(),
+                        )
+                        .await
+                    {
+                        tracing::error!("Failed to publish to MQTT topic '{}': {:?}", topic, e);
+                    } else {
+                        tracing::debug!(
+                            "Published message from '{}' to MQTT topic: {} (payload: {})",
+                            input_message.input_name,
+                            topic,
+                            payload_str
+                        );
+                        messages_published += 1;
                     }
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => {
-                        // Timeout - no messages received, continue processing
-                        break;
-                    }
+                } else {
+                    tracing::warn!(
+                        "No topic mapping found for input channel: {}",
+                        input_message.input_name
+                    );
                 }
             }
 
             // Small delay to prevent busy-waiting when no messages
             if messages_published == 0 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(10)).await;
+                idle_sleep().await;
             }
         }
 

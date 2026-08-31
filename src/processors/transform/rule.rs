@@ -1,4 +1,5 @@
 use crate::config::{ProcessorConfig, StageConfig, defaulted_param, required_param};
+use crate::core::input_poll::{DEFAULT_MAX_DRAIN_PER_INPUT, drain_bounded_each, idle_sleep};
 use crate::core::timing_mixin::{TimingMixin, WithTimingMixin};
 use crate::core::{context::ProcessingContext, message::Message};
 use crate::processors::common::condition_utils::{ConditionEvaluator, ConditionOperation};
@@ -9,7 +10,6 @@ use anyhow::{Result, anyhow};
 use serde::{Deserialize, Serialize};
 use serde_json::{Number, Value};
 use std::collections::HashMap;
-use tokio::select;
 use tracing::{debug, error, warn};
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -691,59 +691,59 @@ impl Processor for RuleProcessor {
     }
 
     async fn process(&mut self, context: &mut ProcessingContext) -> Result<()> {
-        // Process all input channels
-        for (channel_name, input) in context.inputs.iter_mut() {
-            select! {
-                message = input.recv() => {
-                    if let Some(message) = message {
-                        if self.timing.should_drop_message(&message) {
+        let input_messages =
+            drain_bounded_each(&mut context.inputs, DEFAULT_MAX_DRAIN_PER_INPUT).await;
+
+        for input_message in &input_messages {
+            if self.timing.should_drop_message(&input_message.message) {
+                tracing::debug!(
+                    "Message from '{}' was dropped by timing constraints",
+                    input_message.input_name
+                );
+                continue;
+            }
+
+            match self.process_message(input_message.message.clone()) {
+                Ok(Some(transformed_message)) => {
+                    if let Some(output_info) = &context.output {
+                        // Preserve timing information when forwarding
+                        let output_message = Message {
+                            source: transformed_message.source,
+                            topic: output_info.name.clone(),
+                            payload: transformed_message.payload,
+                            timestamp: transformed_message.timestamp,
+                            timing: transformed_message.timing,
+                        };
+
+                        // Update watermark using timing mixin
+                        let output_message = self.timing.update_message_watermark(output_message);
+
+                        if let Err(e) = output_info.channel.publish(output_message).await {
+                            tracing::warn!("Failed to publish transformed message: {:?}", e);
+                        } else {
                             tracing::debug!(
-                                "Message from '{}' was dropped by timing constraints",
-                                channel_name
+                                "Message from '{}' transformed and forwarded",
+                                input_message.input_name
                             );
-                            continue;
-                        }
-
-                        match self.process_message(message) {
-                            Ok(Some(transformed_message)) => {
-                                if let Some(output_info) = &context.output {
-                                    // Preserve timing information when forwarding
-                                    let output_message = Message {
-                                        source: transformed_message.source,
-                                        topic: output_info.name.clone(),
-                                        payload: transformed_message.payload,
-                                        timestamp: transformed_message.timestamp,
-                                        timing: transformed_message.timing,
-                                    };
-
-                                    // Update watermark using timing mixin
-                                    let output_message = self.timing.update_message_watermark(output_message);
-
-                                    if let Err(e) = output_info.channel.publish(output_message).await {
-                                        tracing::warn!("Failed to publish transformed message: {:?}", e);
-                                    } else {
-                                        tracing::debug!(
-                                            "Message from '{}' transformed and forwarded",
-                                            channel_name
-                                        );
-                                    }
-                                }
-                            }
-                            Ok(None) => {
-                                tracing::debug!("Message from '{}' was dropped by rule processor", channel_name);
-                            }
-                            Err(e) => {
-                                error!("Failed to transform message: {}", e);
-                            }
                         }
                     }
                 }
-                _ = tokio::time::sleep(tokio::time::Duration::from_millis(10)) => {
-                    // Timeout - no messages received, continue processing
-                    break;
+                Ok(None) => {
+                    tracing::debug!(
+                        "Message from '{}' was dropped by rule processor",
+                        input_message.input_name
+                    );
+                }
+                Err(e) => {
+                    error!("Failed to transform message: {}", e);
                 }
             }
         }
+
+        if input_messages.is_empty() {
+            idle_sleep().await;
+        }
+
         Ok(())
     }
 }
