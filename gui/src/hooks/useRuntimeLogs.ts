@@ -9,7 +9,9 @@ import {
 } from "../components/runtime-console/RuntimeConsole";
 import {
   RuntimeEvent,
+  RuntimeChannelCounters,
   RuntimeMessageActivity,
+  RuntimeStageCounters,
   RuntimeStageState,
   RuntimeStageStates,
 } from "../types";
@@ -58,6 +60,8 @@ export function useRuntimeLogs({
   const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLogEntry[]>([]);
   const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
   const [runtimeStageStates, setRuntimeStageStates] = useState<RuntimeStageStates>({});
+  const [runtimeStageCounters, setRuntimeStageCounters] = useState<RuntimeStageCounters>({});
+  const [runtimeChannelCounters, setRuntimeChannelCounters] = useState<RuntimeChannelCounters>({});
   const [runtimeMessageActivity, setRuntimeMessageActivity] = useState<RuntimeMessageActivity>(
     emptyRuntimeMessageActivity,
   );
@@ -71,6 +75,11 @@ export function useRuntimeLogs({
   const clearedAtMsRef = useRef(0);
   const discardBackendLogsUntilNextRunRef = useRef(false);
 
+  const setRuntimeStateTracked = useCallback((state: RuntimeState) => {
+    runtimeStateRef.current = state;
+    setRuntimeState(state);
+  }, []);
+
   const appendRuntimeLog = useCallback(
     (stream: RuntimeLogStream, line: string, emittedAtMs?: number) => {
       if (emittedAtMs !== undefined && emittedAtMs <= clearedAtMsRef.current) {
@@ -83,6 +92,9 @@ export function useRuntimeLogs({
         const visibleLogs = logs.filter(
           (log) => (log.timestampMs ?? log.id) > clearedAtMsRef.current,
         );
+        if (isBackendLog && discardBackendLogsUntilNextRunRef.current) {
+          return visibleLogs;
+        }
         if (isBackendLog && timestampMs <= clearedAtMsRef.current) {
           return visibleLogs;
         }
@@ -98,13 +110,9 @@ export function useRuntimeLogs({
 
   useEffect(() => {
     invoke<string>("pipeline_runtime_state")
-      .then((state) => setRuntimeState(state === "running" ? "running" : "idle"))
-      .catch(() => setRuntimeState("idle"));
-  }, []);
-
-  useEffect(() => {
-    runtimeStateRef.current = runtimeState;
-  }, [runtimeState]);
+      .then((state) => setRuntimeStateTracked(state === "running" ? "running" : "idle"))
+      .catch(() => setRuntimeStateTracked("idle"));
+  }, [setRuntimeStateTracked]);
 
   useEffect(() => {
     let disposed = false;
@@ -122,7 +130,7 @@ export function useRuntimeLogs({
         return;
       }
 
-      setRuntimeState(event.payload.state === "running" ? "running" : "idle");
+      setRuntimeStateTracked(event.payload.state === "running" ? "running" : "idle");
       if (event.payload.message && !discardBackendLogsUntilNextRunRef.current) {
         appendRuntimeLog("system", event.payload.message, event.payload.emitted_at_ms);
       }
@@ -140,6 +148,7 @@ export function useRuntimeLogs({
                 (runtimeEvent) => runtimeEvent.timestamp_ms > clearedAtMsRef.current,
               );
               if (
+                discardBackendLogsUntilNextRunRef.current ||
                 event.payload.emitted_at_ms <= clearedAtMsRef.current ||
                 event.payload.event.timestamp_ms <= clearedAtMsRef.current
               ) {
@@ -153,8 +162,13 @@ export function useRuntimeLogs({
           if (!discardBackendLogsUntilNextRunRef.current) {
             applyRuntimeMessageEvent(event.payload.event, setRuntimeMessageActivity);
             applyRuntimeLastMessageEvent(event.payload.event, setRuntimeLastMessageActivity);
+            applyRuntimeCounters(
+              event.payload.event,
+              setRuntimeStageCounters,
+              setRuntimeChannelCounters,
+            );
           }
-          applyPipelineRuntimeEvent(event.payload.event, setRuntimeState);
+          applyPipelineRuntimeEvent(event.payload.event, setRuntimeStateTracked);
           if (
             !discardBackendLogsUntilNextRunRef.current &&
             shouldShowRuntimeEventInConsole(event.payload.event)
@@ -193,9 +207,11 @@ export function useRuntimeLogs({
     }
 
     discardBackendLogsUntilNextRunRef.current = false;
-    setRuntimeState("starting");
+    setRuntimeStateTracked("starting");
     setRuntimeEvents([]);
     setRuntimeStageStates({});
+    setRuntimeStageCounters({});
+    setRuntimeChannelCounters({});
     setRuntimeMessageActivity(emptyRuntimeMessageActivity);
     setRuntimeLastMessageActivity(emptyRuntimeMessageActivity);
     onError(null);
@@ -207,29 +223,31 @@ export function useRuntimeLogs({
       await invoke("start_pipeline", { path: configPath });
     } catch (caught) {
       const message = String(caught);
-      setRuntimeState("error");
+      setRuntimeStateTracked("error");
       setRuntimeEvents([]);
       setRuntimeStageStates({});
+      setRuntimeStageCounters({});
+      setRuntimeChannelCounters({});
       setRuntimeMessageActivity(emptyRuntimeMessageActivity);
       setRuntimeLastMessageActivity(emptyRuntimeMessageActivity);
       onError(message);
       appendRuntimeLog("system", message);
     }
-  }, [appendRuntimeLog, configPath, hasUnsavedDraft, onError]);
+  }, [appendRuntimeLog, configPath, hasUnsavedDraft, onError, setRuntimeStateTracked]);
 
   const stopRuntime = useCallback(async () => {
-    setRuntimeState("stopping");
+    setRuntimeStateTracked("stopping");
     appendRuntimeLog("system", "Stopping pipeline...");
 
     try {
       await invoke("stop_pipeline");
     } catch (caught) {
       const message = String(caught);
-      setRuntimeState("error");
+      setRuntimeStateTracked("error");
       onError(message);
       appendRuntimeLog("system", message);
     }
-  }, [appendRuntimeLog, onError]);
+  }, [appendRuntimeLog, onError, setRuntimeStateTracked]);
 
   const changeRuntimeLogFilter = useCallback((filter: "all" | "selection") => {
     setRuntimeLogFilter(filter);
@@ -246,6 +264,8 @@ export function useRuntimeLogs({
     runtimeLogs,
     runtimeEvents,
     runtimeStageStates,
+    runtimeStageCounters,
+    runtimeChannelCounters,
     runtimeMessageActivity,
     runtimeLastMessageActivity,
     runtimeLogFilter,
@@ -370,6 +390,65 @@ function applyRuntimeLastMessageEvent(
   }));
 }
 
+function applyRuntimeCounters(
+  event: RuntimeEvent,
+  setRuntimeStageCounters: Dispatch<SetStateAction<RuntimeStageCounters>>,
+  setRuntimeChannelCounters: Dispatch<SetStateAction<RuntimeChannelCounters>>,
+) {
+  if (event.kind === "pipeline_starting") {
+    setRuntimeStageCounters({});
+    setRuntimeChannelCounters({});
+    return;
+  }
+
+  const stageId = event.stage_id;
+  const channelName = event.channel_name;
+
+  if (event.kind === "processor_error" && stageId) {
+    setRuntimeStageCounters((currentCounters) => {
+      const current = currentCounters[stageId] ?? { received: 0, emitted: 0, errors: 0 };
+      return {
+        ...currentCounters,
+        [stageId]: { ...current, errors: current.errors + 1 },
+      };
+    });
+    return;
+  }
+
+  if (event.kind !== "message_received" && event.kind !== "message_emitted") {
+    return;
+  }
+
+  if (stageId) {
+    setRuntimeStageCounters((currentCounters) => {
+      const current = currentCounters[stageId] ?? { received: 0, emitted: 0, errors: 0 };
+      return {
+        ...currentCounters,
+        [stageId]: {
+          ...current,
+          received:
+            event.kind === "message_received" ? current.received + 1 : current.received,
+          emitted: event.kind === "message_emitted" ? current.emitted + 1 : current.emitted,
+        },
+      };
+    });
+  }
+
+  if (channelName) {
+    setRuntimeChannelCounters((currentCounters) => {
+      const current = currentCounters[channelName] ?? { received: 0, emitted: 0 };
+      return {
+        ...currentCounters,
+        [channelName]: {
+          received:
+            event.kind === "message_received" ? current.received + 1 : current.received,
+          emitted: event.kind === "message_emitted" ? current.emitted + 1 : current.emitted,
+        },
+      };
+    });
+  }
+}
+
 function pruneRuntimeMessageActivity(
   activity: RuntimeMessageActivity,
   nowMs: number,
@@ -402,7 +481,7 @@ function runtimeStageStateForEvent(event: RuntimeEvent): RuntimeStageState | nul
 
 function applyPipelineRuntimeEvent(
   event: RuntimeEvent,
-  setRuntimeState: Dispatch<SetStateAction<RuntimeState>>,
+  setRuntimeState: (state: RuntimeState) => void,
 ) {
   switch (event.kind) {
     case "pipeline_starting":

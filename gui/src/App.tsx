@@ -148,6 +148,8 @@ function App() {
     runtimeLogs,
     runtimeEvents,
     runtimeStageStates,
+    runtimeStageCounters,
+    runtimeChannelCounters,
     runtimeMessageActivity,
     runtimeLastMessageActivity,
     runtimeLogFilter,
@@ -1200,6 +1202,8 @@ function App() {
               selectedEdgeId={selectedEdgeId}
               selectedDiagnosticKey={selectedDiagnosticKey}
               runtimeStageStates={runtimeStageStates}
+              runtimeStageCounters={runtimeStageCounters}
+              runtimeChannelCounters={runtimeChannelCounters}
               runtimeMessageActivity={runtimeLastMessageActivity}
               onSelectNode={selectNode}
               onSelectChannel={selectChannel}

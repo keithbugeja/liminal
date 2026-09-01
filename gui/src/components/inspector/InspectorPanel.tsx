@@ -24,7 +24,9 @@ import {
   JsonValue,
   ProcessorDescriptor,
   ResolvedPipelineGraph,
+  RuntimeChannelCounters,
   RuntimeMessageActivity,
+  RuntimeStageCounters,
   RuntimeStageSnapshot,
   RuntimeStageStates,
   SaveState,
@@ -38,6 +40,8 @@ export function InspectorPanel({
   selectedEdgeId,
   selectedDiagnosticKey,
   runtimeStageStates,
+  runtimeStageCounters,
+  runtimeChannelCounters,
   runtimeMessageActivity,
   onSelectNode,
   onSelectChannel,
@@ -57,6 +61,8 @@ export function InspectorPanel({
   selectedEdgeId: string | null;
   selectedDiagnosticKey: string | null;
   runtimeStageStates: RuntimeStageStates;
+  runtimeStageCounters: RuntimeStageCounters;
+  runtimeChannelCounters: RuntimeChannelCounters;
   runtimeMessageActivity: RuntimeMessageActivity;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
@@ -130,6 +136,7 @@ export function InspectorPanel({
           diagnostics={channelDiagnostics}
           selectedDiagnostic={selectedDiagnostic}
           runtimeMessageActivity={runtimeMessageActivity}
+          runtimeChannelCounters={runtimeChannelCounters}
           onSelectNode={selectNode}
         />
       ) : selectedChannelName ? (
@@ -147,6 +154,7 @@ export function InspectorPanel({
           diagnostics={nodeDiagnostics}
           selectedDiagnostic={selectedDiagnostic}
           runtimeSnapshot={runtimeStageSnapshotForNode(selectedNode, runtimeStageStates)}
+          runtimeCounters={runtimeStageCounters[stageNameForNode(selectedNode) ?? ""] ?? null}
           runtimeMessageActivity={runtimeMessageActivity}
           onSelectChannel={selectChannel}
           onUpdateParameter={onUpdateNodeParameter}
@@ -173,6 +181,7 @@ function NodeInspector({
   diagnostics,
   selectedDiagnostic,
   runtimeSnapshot,
+  runtimeCounters,
   runtimeMessageActivity,
   onSelectChannel,
   onUpdateParameter,
@@ -188,6 +197,7 @@ function NodeInspector({
   diagnostics: GraphDiagnostic[];
   selectedDiagnostic: GraphDiagnostic | null;
   runtimeSnapshot: RuntimeStageSnapshot | null;
+  runtimeCounters: RuntimeStageCounters[string] | null;
   runtimeMessageActivity: RuntimeMessageActivity;
   onSelectChannel: (channelName: string | null) => void;
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
@@ -226,6 +236,7 @@ function NodeInspector({
       <NodeRuntimeSection
         node={node}
         runtimeSnapshot={runtimeSnapshot}
+        runtimeCounters={runtimeCounters}
         runtimeMessageActivity={runtimeMessageActivity}
       />
       <InspectorSection title="Overview" defaultOpen>
@@ -401,10 +412,12 @@ function NodeInspector({
 function NodeRuntimeSection({
   node,
   runtimeSnapshot,
+  runtimeCounters,
   runtimeMessageActivity,
 }: {
   node: GraphNode;
   runtimeSnapshot: RuntimeStageSnapshot | null;
+  runtimeCounters: RuntimeStageCounters[string] | null;
   runtimeMessageActivity: RuntimeMessageActivity;
 }) {
   const stageName = stageNameForNode(node);
@@ -434,6 +447,11 @@ function NodeRuntimeSection({
           </div>
           {runtimeSnapshot.message && <p className="runtime-inspector-message">{runtimeSnapshot.message}</p>}
           <KeyValue label="Stage" value={stageName ?? node.display_name} />
+          <KeyValue label="Received" value={formatRuntimeCount(runtimeCounters?.received ?? 0)} />
+          <KeyValue label="Emitted" value={formatRuntimeCount(runtimeCounters?.emitted ?? 0)} />
+          {(runtimeCounters?.errors ?? 0) > 0 && (
+            <KeyValue label="Errors" value={formatRuntimeCount(runtimeCounters?.errors ?? 0)} />
+          )}
           <KeyValue label="State updated" value={formatRuntimeTime(runtimeSnapshot.updatedAtMs)} />
           <KeyValue
             label="Last activity"
@@ -460,21 +478,37 @@ function NodeRuntimeSection({
 function ChannelRuntimeSection({
   channel,
   runtimeMessageActivity,
+  runtimeChannelCounters,
 }: {
   channel: GraphChannel;
   runtimeMessageActivity: RuntimeMessageActivity;
+  runtimeChannelCounters: RuntimeChannelCounters;
 }) {
   const activityMs = runtimeMessageActivity.channelNames[channel.name];
+  const counters = runtimeChannelCounters[channel.name];
 
   return (
-    <InspectorSection title="Runtime" badge={activityMs ? "active" : undefined} defaultOpen>
-      {activityMs ? (
+    <InspectorSection
+      title="Runtime"
+      badge={activityMs || counters ? "active" : undefined}
+      defaultOpen
+    >
+      {activityMs || counters ? (
         <div className="runtime-inspector">
           <div className="runtime-inspector-status">
-            <span className="runtime-inspector-badge running">active</span>
+            <span
+              className={activityMs ? "runtime-inspector-badge running" : "runtime-inspector-badge"}
+            >
+              {activityMs ? "active" : "seen"}
+            </span>
             <span>{channel.channel_type}</span>
           </div>
-          <KeyValue label="Last activity" value={formatRuntimeTime(activityMs)} />
+          <KeyValue label="Received" value={formatRuntimeCount(counters?.received ?? 0)} />
+          <KeyValue label="Emitted" value={formatRuntimeCount(counters?.emitted ?? 0)} />
+          <KeyValue
+            label="Last activity"
+            value={activityMs ? formatRuntimeTime(activityMs) : "No recent activity."}
+          />
           <KeyValue label="Producers" value={String(channel.producer_node_ids.length)} />
           <KeyValue label="Consumers" value={String(channel.consumer_node_ids.length)} />
         </div>
@@ -545,6 +579,7 @@ function ChannelInspector({
   diagnostics,
   selectedDiagnostic,
   runtimeMessageActivity,
+  runtimeChannelCounters,
   onSelectNode,
 }: {
   channel: GraphChannel;
@@ -552,13 +587,18 @@ function ChannelInspector({
   diagnostics: GraphDiagnostic[];
   selectedDiagnostic: GraphDiagnostic | null;
   runtimeMessageActivity: RuntimeMessageActivity;
+  runtimeChannelCounters: RuntimeChannelCounters;
   onSelectNode: (id: string | null) => void;
 }) {
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow="Channel" title={channel.name} />
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
-      <ChannelRuntimeSection channel={channel} runtimeMessageActivity={runtimeMessageActivity} />
+      <ChannelRuntimeSection
+        channel={channel}
+        runtimeMessageActivity={runtimeMessageActivity}
+        runtimeChannelCounters={runtimeChannelCounters}
+      />
       <KeyValue label="Type" value={channel.channel_type} />
       <KeyValue label="Capacity" value={String(channel.capacity)} />
 
@@ -633,6 +673,10 @@ function formatRuntimeTime(timestampMs: number) {
 
   const date = new Date(timestampMs);
   return `${date.toLocaleTimeString()} (${relativeRuntimeAge(timestampMs)})`;
+}
+
+function formatRuntimeCount(count: number) {
+  return new Intl.NumberFormat().format(count);
 }
 
 function relativeRuntimeAge(timestampMs: number) {

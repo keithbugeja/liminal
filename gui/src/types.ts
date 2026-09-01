@@ -152,3 +152,20 @@ export type RuntimeMessageActivity = {
   stageIds: Record<string, number>;
   channelNames: Record<string, number>;
 };
+
+export type RuntimeStageCounters = Record<
+  string,
+  {
+    received: number;
+    emitted: number;
+    errors: number;
+  }
+>;
+
+export type RuntimeChannelCounters = Record<
+  string,
+  {
+    received: number;
+    emitted: number;
+  }
+>;
