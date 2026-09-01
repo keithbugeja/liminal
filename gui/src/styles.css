@@ -1042,6 +1042,101 @@ button {
   border-bottom: 0;
 }
 
+.runtime-inspector {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+}
+
+.runtime-inspector-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid #1d2d31;
+  color: #9fb7b3;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.runtime-inspector-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 3px 8px;
+  border: 1px solid rgba(141, 233, 221, 0.24);
+  border-radius: 999px;
+  background: rgba(13, 32, 33, 0.72);
+  color: #9fb7b3;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.runtime-inspector-badge.starting {
+  color: #f1d283;
+}
+
+.runtime-inspector-badge.running {
+  border-color: rgba(103, 229, 216, 0.46);
+  color: #67e5d8;
+}
+
+.runtime-inspector-badge.error {
+  border-color: rgba(200, 95, 88, 0.5);
+  color: #ffaaa3;
+}
+
+.runtime-inspector-message {
+  margin: 9px 0 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(200, 95, 88, 0.42);
+  border-radius: 6px;
+  background: rgba(58, 17, 16, 0.26);
+  color: #ffd4cf;
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.runtime-channel-activity {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 9px;
+}
+
+.runtime-channel-activity div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid #203438;
+  border-radius: 6px;
+  background: rgba(15, 28, 31, 0.58);
+}
+
+.runtime-channel-activity span {
+  min-width: 0;
+  overflow: hidden;
+  color: #d7ebe6;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.runtime-channel-activity strong {
+  color: #8ea5a0;
+  font-size: 11px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .descriptor-summary {
   display: flex;
   min-width: 0;

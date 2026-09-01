@@ -61,6 +61,8 @@ export function useRuntimeLogs({
   const [runtimeMessageActivity, setRuntimeMessageActivity] = useState<RuntimeMessageActivity>(
     emptyRuntimeMessageActivity,
   );
+  const [runtimeLastMessageActivity, setRuntimeLastMessageActivity] =
+    useState<RuntimeMessageActivity>(emptyRuntimeMessageActivity);
   const [runtimeLogFilter, setRuntimeLogFilter] = useState<"all" | "selection">("all");
   const [runtimeContentFilter, setRuntimeContentFilter] = useState<RuntimeContentFilter>(
     defaultRuntimeContentFilter,
@@ -150,6 +152,7 @@ export function useRuntimeLogs({
           applyRuntimeEvent(event.payload.event, setRuntimeStageStates);
           if (!discardBackendLogsUntilNextRunRef.current) {
             applyRuntimeMessageEvent(event.payload.event, setRuntimeMessageActivity);
+            applyRuntimeLastMessageEvent(event.payload.event, setRuntimeLastMessageActivity);
           }
           applyPipelineRuntimeEvent(event.payload.event, setRuntimeState);
           if (
@@ -194,6 +197,7 @@ export function useRuntimeLogs({
     setRuntimeEvents([]);
     setRuntimeStageStates({});
     setRuntimeMessageActivity(emptyRuntimeMessageActivity);
+    setRuntimeLastMessageActivity(emptyRuntimeMessageActivity);
     onError(null);
     clearedAtMsRef.current = 0;
     setRuntimeLogs([]);
@@ -207,6 +211,7 @@ export function useRuntimeLogs({
       setRuntimeEvents([]);
       setRuntimeStageStates({});
       setRuntimeMessageActivity(emptyRuntimeMessageActivity);
+      setRuntimeLastMessageActivity(emptyRuntimeMessageActivity);
       onError(message);
       appendRuntimeLog("system", message);
     }
@@ -242,6 +247,7 @@ export function useRuntimeLogs({
     runtimeEvents,
     runtimeStageStates,
     runtimeMessageActivity,
+    runtimeLastMessageActivity,
     runtimeLogFilter,
     runtimeContentFilter,
     setRuntimeLogFilter: changeRuntimeLogFilter,
@@ -339,6 +345,29 @@ function applyRuntimeMessageEvent(
       event.timestamp_ms,
     ),
   );
+}
+
+function applyRuntimeLastMessageEvent(
+  event: RuntimeEvent,
+  setRuntimeLastMessageActivity: Dispatch<SetStateAction<RuntimeMessageActivity>>,
+) {
+  if (event.kind === "pipeline_starting") {
+    setRuntimeLastMessageActivity(emptyRuntimeMessageActivity);
+    return;
+  }
+
+  if (event.kind !== "message_received" && event.kind !== "message_emitted") {
+    return;
+  }
+
+  setRuntimeLastMessageActivity((currentActivity) => ({
+    stageIds: event.stage_id
+      ? { ...currentActivity.stageIds, [event.stage_id]: event.timestamp_ms }
+      : currentActivity.stageIds,
+    channelNames: event.channel_name
+      ? { ...currentActivity.channelNames, [event.channel_name]: event.timestamp_ms }
+      : currentActivity.channelNames,
+  }));
 }
 
 function pruneRuntimeMessageActivity(

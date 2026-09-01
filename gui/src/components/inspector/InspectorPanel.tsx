@@ -24,6 +24,9 @@ import {
   JsonValue,
   ProcessorDescriptor,
   ResolvedPipelineGraph,
+  RuntimeMessageActivity,
+  RuntimeStageSnapshot,
+  RuntimeStageStates,
   SaveState,
 } from "../../types";
 export function InspectorPanel({
@@ -34,6 +37,8 @@ export function InspectorPanel({
   selectedChannelName,
   selectedEdgeId,
   selectedDiagnosticKey,
+  runtimeStageStates,
+  runtimeMessageActivity,
   onSelectNode,
   onSelectChannel,
   onSelectEdge,
@@ -51,6 +56,8 @@ export function InspectorPanel({
   selectedChannelName: string | null;
   selectedEdgeId: string | null;
   selectedDiagnosticKey: string | null;
+  runtimeStageStates: RuntimeStageStates;
+  runtimeMessageActivity: RuntimeMessageActivity;
   onSelectNode: (id: string | null) => void;
   onSelectChannel: (channelName: string | null) => void;
   onSelectEdge: (edgeId: string | null) => void;
@@ -122,6 +129,7 @@ export function InspectorPanel({
           graph={graph}
           diagnostics={channelDiagnostics}
           selectedDiagnostic={selectedDiagnostic}
+          runtimeMessageActivity={runtimeMessageActivity}
           onSelectNode={selectNode}
         />
       ) : selectedChannelName ? (
@@ -138,6 +146,8 @@ export function InspectorPanel({
           processorDescriptors={processorDescriptors}
           diagnostics={nodeDiagnostics}
           selectedDiagnostic={selectedDiagnostic}
+          runtimeSnapshot={runtimeStageSnapshotForNode(selectedNode, runtimeStageStates)}
+          runtimeMessageActivity={runtimeMessageActivity}
           onSelectChannel={selectChannel}
           onUpdateParameter={onUpdateNodeParameter}
           onUpdateParameterJson={onUpdateNodeParameterJson}
@@ -162,6 +172,8 @@ function NodeInspector({
   processorDescriptors,
   diagnostics,
   selectedDiagnostic,
+  runtimeSnapshot,
+  runtimeMessageActivity,
   onSelectChannel,
   onUpdateParameter,
   onUpdateParameterJson,
@@ -175,6 +187,8 @@ function NodeInspector({
   processorDescriptors: ProcessorDescriptor[];
   diagnostics: GraphDiagnostic[];
   selectedDiagnostic: GraphDiagnostic | null;
+  runtimeSnapshot: RuntimeStageSnapshot | null;
+  runtimeMessageActivity: RuntimeMessageActivity;
   onSelectChannel: (channelName: string | null) => void;
   onUpdateParameter: (nodeId: string, parameterKey: string, value: string) => Promise<void>;
   onUpdateParameterJson: (nodeId: string, parameterKey: string, value: JsonValue) => Promise<void>;
@@ -209,6 +223,11 @@ function NodeInspector({
         </button>
       </div>
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
+      <NodeRuntimeSection
+        node={node}
+        runtimeSnapshot={runtimeSnapshot}
+        runtimeMessageActivity={runtimeMessageActivity}
+      />
       <InspectorSection title="Overview" defaultOpen>
         {processorDescriptor && (
           <DescriptorSummary descriptor={processorDescriptor} configuredCount={node.parameters.length} />
@@ -379,6 +398,93 @@ function NodeInspector({
   );
 }
 
+function NodeRuntimeSection({
+  node,
+  runtimeSnapshot,
+  runtimeMessageActivity,
+}: {
+  node: GraphNode;
+  runtimeSnapshot: RuntimeStageSnapshot | null;
+  runtimeMessageActivity: RuntimeMessageActivity;
+}) {
+  const stageName = stageNameForNode(node);
+  const stageActivityMs = stageName ? runtimeMessageActivity.stageIds[stageName] : undefined;
+  const channelActivities = [...node.input_channels, node.output_channel ?? ""]
+    .filter(Boolean)
+    .map((channelName) => ({
+      channelName,
+      timestampMs: runtimeMessageActivity.channelNames[channelName],
+    }))
+    .filter((activity) => activity.timestampMs !== undefined)
+    .sort((left, right) => right.timestampMs - left.timestampMs);
+  const latestActivityMs = Math.max(
+    stageActivityMs ?? 0,
+    ...channelActivities.map((activity) => activity.timestampMs),
+  );
+
+  return (
+    <InspectorSection title="Runtime" badge={runtimeSnapshot?.state} defaultOpen>
+      {runtimeSnapshot ? (
+        <div className="runtime-inspector">
+          <div className="runtime-inspector-status">
+            <span className={`runtime-inspector-badge ${runtimeSnapshot.state}`}>
+              {runtimeSnapshot.state}
+            </span>
+            <span>{runtimeSnapshot.processorType ?? node.processor_type}</span>
+          </div>
+          {runtimeSnapshot.message && <p className="runtime-inspector-message">{runtimeSnapshot.message}</p>}
+          <KeyValue label="Stage" value={stageName ?? node.display_name} />
+          <KeyValue label="State updated" value={formatRuntimeTime(runtimeSnapshot.updatedAtMs)} />
+          <KeyValue
+            label="Last activity"
+            value={latestActivityMs > 0 ? formatRuntimeTime(latestActivityMs) : "No messages observed."}
+          />
+          {channelActivities.length > 0 && (
+            <div className="runtime-channel-activity">
+              {channelActivities.slice(0, 4).map((activity) => (
+                <div key={activity.channelName}>
+                  <span>{activity.channelName}</span>
+                  <strong>{formatRuntimeTime(activity.timestampMs)}</strong>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <p className="empty-state">No runtime events for this node yet.</p>
+      )}
+    </InspectorSection>
+  );
+}
+
+function ChannelRuntimeSection({
+  channel,
+  runtimeMessageActivity,
+}: {
+  channel: GraphChannel;
+  runtimeMessageActivity: RuntimeMessageActivity;
+}) {
+  const activityMs = runtimeMessageActivity.channelNames[channel.name];
+
+  return (
+    <InspectorSection title="Runtime" badge={activityMs ? "active" : undefined} defaultOpen>
+      {activityMs ? (
+        <div className="runtime-inspector">
+          <div className="runtime-inspector-status">
+            <span className="runtime-inspector-badge running">active</span>
+            <span>{channel.channel_type}</span>
+          </div>
+          <KeyValue label="Last activity" value={formatRuntimeTime(activityMs)} />
+          <KeyValue label="Producers" value={String(channel.producer_node_ids.length)} />
+          <KeyValue label="Consumers" value={String(channel.consumer_node_ids.length)} />
+        </div>
+      ) : (
+        <p className="empty-state">No runtime messages observed on this channel yet.</p>
+      )}
+    </InspectorSection>
+  );
+}
+
 function EdgeInspector({
   edge,
   graph,
@@ -438,18 +544,21 @@ function ChannelInspector({
   graph,
   diagnostics,
   selectedDiagnostic,
+  runtimeMessageActivity,
   onSelectNode,
 }: {
   channel: GraphChannel;
   graph: ResolvedPipelineGraph;
   diagnostics: GraphDiagnostic[];
   selectedDiagnostic: GraphDiagnostic | null;
+  runtimeMessageActivity: RuntimeMessageActivity;
   onSelectNode: (id: string | null) => void;
 }) {
   return (
     <div className="inspector-body">
       <InspectorTitle eyebrow="Channel" title={channel.name} />
       {selectedDiagnostic && <SelectedDiagnostic diagnostic={selectedDiagnostic} />}
+      <ChannelRuntimeSection channel={channel} runtimeMessageActivity={runtimeMessageActivity} />
       <KeyValue label="Type" value={channel.channel_type} />
       <KeyValue label="Capacity" value={String(channel.capacity)} />
 
@@ -488,6 +597,54 @@ function timingValue(node: GraphNode, key: string, fallback: string) {
   return node.timing.find((field) => field.key === key)?.value ?? fallback;
 }
 
+function runtimeStageSnapshotForNode(
+  node: GraphNode,
+  runtimeStageStates: RuntimeStageStates,
+) {
+  const stageName = stageNameForNode(node);
+  return stageName ? runtimeStageStates[stageName] ?? null : null;
+}
+
+function stageNameForNode(node: GraphNode) {
+  const configPathParts = node.config_path.split(".");
+  const lastConfigPathPart = configPathParts[configPathParts.length - 1];
+  if (lastConfigPathPart) {
+    return lastConfigPathPart;
+  }
+
+  if (node.id.startsWith("input:") || node.id.startsWith("output:")) {
+    const idParts = node.id.split(":");
+    return idParts[idParts.length - 1] ?? null;
+  }
+
+  const stageMarker = ".stage:";
+  const stageMarkerIndex = node.id.indexOf(stageMarker);
+  if (stageMarkerIndex >= 0) {
+    return node.id.slice(stageMarkerIndex + stageMarker.length);
+  }
+
+  return null;
+}
+
+function formatRuntimeTime(timestampMs: number) {
+  if (!Number.isFinite(timestampMs) || timestampMs <= 0) {
+    return "Unknown";
+  }
+
+  const date = new Date(timestampMs);
+  return `${date.toLocaleTimeString()} (${relativeRuntimeAge(timestampMs)})`;
+}
+
+function relativeRuntimeAge(timestampMs: number) {
+  const elapsedMs = Math.max(0, Date.now() - timestampMs);
+  if (elapsedMs < 1000) {
+    return "just now";
+  }
+  if (elapsedMs < 60_000) {
+    return `${Math.round(elapsedMs / 1000)}s ago`;
+  }
+  return `${Math.round(elapsedMs / 60_000)}m ago`;
+}
 
 function diagnosticKey(diagnostic: GraphDiagnostic, index: number) {
   return [

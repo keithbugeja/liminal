@@ -149,6 +149,7 @@ function App() {
     runtimeEvents,
     runtimeStageStates,
     runtimeMessageActivity,
+    runtimeLastMessageActivity,
     runtimeLogFilter,
     runtimeContentFilter,
     setRuntimeLogFilter,
@@ -1198,6 +1199,8 @@ function App() {
               selectedChannelName={selectedChannelName}
               selectedEdgeId={selectedEdgeId}
               selectedDiagnosticKey={selectedDiagnosticKey}
+              runtimeStageStates={runtimeStageStates}
+              runtimeMessageActivity={runtimeLastMessageActivity}
               onSelectNode={selectNode}
               onSelectChannel={selectChannel}
               onSelectEdge={selectEdge}
