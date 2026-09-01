@@ -23,6 +23,7 @@ import { AlertCircle, CircleDot, Loader2, Play, RotateCcw, Square } from "lucide
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   RuntimeConsole,
+  RuntimeContentFilter,
   RuntimeLogEntry,
   RuntimeState,
 } from "../runtime-console/RuntimeConsole";
@@ -33,6 +34,7 @@ import {
   GraphLane,
   GraphNode,
   ResolvedPipelineGraph,
+  RuntimeEvent,
   RuntimeMessageActivity,
   RuntimeStageSnapshot,
   RuntimeStageStates,
@@ -122,12 +124,15 @@ export function GraphCanvas({
   loadState,
   runtimeState,
   runtimeLogs,
+  runtimeEvents,
   runtimeStageStates,
   runtimeMessageActivity,
   runtimeLogFilter,
+  runtimeContentFilter,
   selectedRuntimeNode,
   selectedRuntimeChannelName,
   onRuntimeLogFilterChange,
+  onRuntimeContentFilterChange,
   onClearRuntimeLogs,
 }: {
   graph: ResolvedPipelineGraph | null;
@@ -149,12 +154,15 @@ export function GraphCanvas({
   loadState: "idle" | "loading" | "error";
   runtimeState: RuntimeState;
   runtimeLogs: RuntimeLogEntry[];
+  runtimeEvents: RuntimeEvent[];
   runtimeStageStates: RuntimeStageStates;
   runtimeMessageActivity: RuntimeMessageActivity;
   runtimeLogFilter: "all" | "selection";
+  runtimeContentFilter: RuntimeContentFilter;
   selectedRuntimeNode: GraphNode | null;
   selectedRuntimeChannelName: string | null;
   onRuntimeLogFilterChange: (filter: "all" | "selection") => void;
+  onRuntimeContentFilterChange: (filter: RuntimeContentFilter) => void;
   onClearRuntimeLogs: () => void;
 }) {
   const [connectionSourceNodeId, setConnectionSourceNodeId] = useState<string | null>(null);
@@ -234,6 +242,19 @@ export function GraphCanvas({
   const runtimeSelectionTokenList = useMemo(
     () => runtimeSelectionTokens(selectedRuntimeNode, selectedRuntimeChannelName),
     [selectedRuntimeChannelName, selectedRuntimeNode],
+  );
+  const runtimeSelectionEventLogs = useMemo(
+    () =>
+      runtimeSelectionEvents(
+        runtimeEvents,
+        selectedRuntimeNode,
+        selectedRuntimeChannelName,
+      ),
+    [runtimeEvents, selectedRuntimeChannelName, selectedRuntimeNode],
+  );
+  const runtimeTelemetryLogs = useMemo(
+    () => runtimeEvents.map(runtimeEventToLogEntry),
+    [runtimeEvents],
   );
   const runtimeSelectionLabel =
     selectedRuntimeChannelName ?? selectedRuntimeNode?.display_name ?? "No selection";
@@ -662,9 +683,13 @@ export function GraphCanvas({
         logs={runtimeLogs}
         state={runtimeState}
         filter={runtimeLogFilter}
+        contentFilter={runtimeContentFilter}
         selectionTokens={runtimeSelectionTokenList}
+        telemetryLogs={runtimeTelemetryLogs}
+        selectionEventLogs={runtimeSelectionEventLogs}
         selectionLabel={runtimeSelectionLabel}
         onFilterChange={onRuntimeLogFilterChange}
+        onContentFilterChange={onRuntimeContentFilterChange}
         onClear={onClearRuntimeLogs}
       />
       <div className="flow-area" ref={flowAreaRef}>
@@ -1328,6 +1353,54 @@ function runtimeSelectionTokens(selectedNode: GraphNode | null, selectedChannelN
   }
 
   return [...tokens].filter((token) => token.trim().length > 0);
+}
+
+function runtimeSelectionEvents(
+  events: RuntimeEvent[],
+  selectedNode: GraphNode | null,
+  selectedChannelName: string | null,
+): RuntimeLogEntry[] {
+  if (!selectedNode && !selectedChannelName) {
+    return [];
+  }
+
+  const selectedStageName = selectedNode ? stageNameForNode(selectedNode) : null;
+  const selectedNodeChannels = new Set<string>(
+    selectedNode
+      ? [...selectedNode.input_channels, selectedNode.output_channel ?? ""].filter(Boolean)
+      : [],
+  );
+
+  return events
+    .filter((event) => {
+      if (selectedChannelName) {
+        return event.channel_name === selectedChannelName;
+      }
+
+      return (
+        Boolean(selectedStageName && event.stage_id === selectedStageName) ||
+        Boolean(event.channel_name && selectedNodeChannels.has(event.channel_name))
+      );
+    })
+    .map(runtimeEventToLogEntry);
+}
+
+function runtimeEventToLogEntry(event: RuntimeEvent): RuntimeLogEntry {
+  return {
+    id: event.id,
+    stream: "system",
+    line: formatRuntimeSelectionEvent(event),
+    timestampMs: event.timestamp_ms,
+  };
+}
+
+function formatRuntimeSelectionEvent(event: RuntimeEvent) {
+  const label = event.kind.replace(/_/g, " ");
+  const stage = event.stage_id ? ` ${event.stage_id}` : "";
+  const processor = event.processor_type ? ` (${event.processor_type})` : "";
+  const channel = event.channel_name ? ` [${event.channel_name}]` : "";
+  const text = event.text ? `: ${event.text}` : "";
+  return `event: ${label}${stage}${processor}${channel}${text}`;
 }
 
 function runtimeActivityFromState(

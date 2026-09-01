@@ -146,10 +146,13 @@ function App() {
   const {
     runtimeState,
     runtimeLogs,
+    runtimeEvents,
     runtimeStageStates,
     runtimeMessageActivity,
     runtimeLogFilter,
+    runtimeContentFilter,
     setRuntimeLogFilter,
+    setRuntimeContentFilter,
     startRuntime,
     stopRuntime,
     clearRuntimeLogs,
@@ -1143,12 +1146,15 @@ function App() {
             loadState={loadState}
             runtimeState={runtimeState}
             runtimeLogs={runtimeLogs}
+            runtimeEvents={runtimeEvents}
             runtimeStageStates={runtimeStageStates}
             runtimeMessageActivity={runtimeMessageActivity}
             runtimeLogFilter={runtimeLogFilter}
+            runtimeContentFilter={runtimeContentFilter}
             selectedRuntimeNode={selectedRuntimeNode}
             selectedRuntimeChannelName={selectedChannelName}
             onRuntimeLogFilterChange={setRuntimeLogFilter}
+            onRuntimeContentFilterChange={setRuntimeContentFilter}
             onClearRuntimeLogs={clearRuntimeLogs}
           />
         </main>

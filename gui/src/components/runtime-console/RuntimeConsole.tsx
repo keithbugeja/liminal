@@ -15,15 +15,25 @@ export type RuntimeLogEntry = {
   id: number;
   stream: RuntimeLogStream;
   line: string;
+  timestampMs?: number;
+};
+
+export type RuntimeContentFilter = {
+  logs: boolean;
+  telemetry: boolean;
 };
 
 type RuntimeConsoleProps = {
   logs: RuntimeLogEntry[];
   state: RuntimeState;
   filter: "all" | "selection";
+  contentFilter: RuntimeContentFilter;
   selectionTokens: string[];
+  telemetryLogs: RuntimeLogEntry[];
+  selectionEventLogs: RuntimeLogEntry[];
   selectionLabel: string;
   onFilterChange: (filter: "all" | "selection") => void;
+  onContentFilterChange: (filter: RuntimeContentFilter) => void;
   onClear: () => void;
 };
 
@@ -37,9 +47,13 @@ export function RuntimeConsole({
   logs,
   state,
   filter,
+  contentFilter,
   selectionTokens,
+  telemetryLogs,
+  selectionEventLogs,
   selectionLabel,
   onFilterChange,
+  onContentFilterChange,
   onClear,
 }: RuntimeConsoleProps) {
   const logListRef = useRef<HTMLDivElement | null>(null);
@@ -48,10 +62,20 @@ export function RuntimeConsole({
   const [followLogs, setFollowLogs] = useState(true);
   const filteredLogs =
     filter === "selection" && selectionTokens.length > 0
-      ? logs.filter((entry) =>
-          selectionTokens.some((token) => entry.line.toLowerCase().includes(token.toLowerCase())),
+      ? mergeRuntimeLogStreams(
+          contentFilter.logs
+            ? logs.filter((entry) =>
+                selectionTokens.some((token) =>
+                  entry.line.toLowerCase().includes(token.toLowerCase()),
+                ),
+              )
+            : [],
+          contentFilter.telemetry ? selectionEventLogs : [],
         )
-      : logs;
+      : mergeRuntimeLogStreams(
+          contentFilter.logs ? logs : [],
+          contentFilter.telemetry ? telemetryLogs : [],
+        );
   const stateLabel =
     state === "starting"
       ? "Starting"
@@ -125,6 +149,16 @@ export function RuntimeConsole({
       }
     });
   }, []);
+  const toggleContentFilter = useCallback(
+    (key: keyof RuntimeContentFilter) => {
+      const nextFilter = { ...contentFilter, [key]: !contentFilter[key] };
+      if (!nextFilter.logs && !nextFilter.telemetry) {
+        return;
+      }
+      onContentFilterChange(nextFilter);
+    },
+    [contentFilter, onContentFilterChange],
+  );
 
   return (
     <section className="runtime-console">
@@ -151,6 +185,22 @@ export function RuntimeConsole({
               Selection
             </button>
           </div>
+          <div className="runtime-filter" role="group" aria-label="Console streams">
+            <button
+              className={contentFilter.logs ? "active" : ""}
+              onClick={() => toggleContentFilter("logs")}
+              title={contentFilter.logs ? "Hide logs" : "Show logs"}
+            >
+              Logs
+            </button>
+            <button
+              className={contentFilter.telemetry ? "active" : ""}
+              onClick={() => toggleContentFilter("telemetry")}
+              title={contentFilter.telemetry ? "Hide telemetry" : "Show telemetry"}
+            >
+              Telemetry
+            </button>
+          </div>
           <button
             className={followLogs ? "runtime-tail active" : "runtime-tail"}
             onClick={followLogs ? () => setFollowLogs(false) : resumeFollowingLogs}
@@ -159,7 +209,11 @@ export function RuntimeConsole({
           >
             Tail
           </button>
-          <button className="runtime-clear" onClick={onClear} disabled={logs.length === 0}>
+          <button
+            className="runtime-clear"
+            onClick={onClear}
+            disabled={logs.length === 0 && telemetryLogs.length === 0}
+          >
             Clear
           </button>
         </div>
@@ -177,7 +231,7 @@ export function RuntimeConsole({
         {filteredLogs.length === 0 ? (
           <p className="runtime-empty">
             {filter === "selection" && selectionTokens.length > 0
-              ? `No console lines match ${selectionLabel}.`
+              ? `No runtime lines match ${selectionLabel}.`
               : "Run the pipeline to stream output here."}
           </p>
         ) : (
@@ -190,6 +244,12 @@ export function RuntimeConsole({
         )}
       </div>
     </section>
+  );
+}
+
+function mergeRuntimeLogStreams(logs: RuntimeLogEntry[], telemetry: RuntimeLogEntry[]) {
+  return [...logs, ...telemetry].sort(
+    (left, right) => (left.timestampMs ?? left.id) - (right.timestampMs ?? right.id),
   );
 }
 

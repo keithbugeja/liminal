@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { Dispatch, SetStateAction, useCallback, useEffect, useRef, useState } from "react";
 import {
+  RuntimeContentFilter,
   RuntimeLogEntry,
   RuntimeLogStream,
   RuntimeState,
@@ -31,11 +32,17 @@ type PipelineRuntimeEventPayload = {
 };
 
 const maxRuntimeLogs = 500;
+const maxRuntimeEvents = 1500;
 const runtimeActivityTtlMs = 2200;
 
 const emptyRuntimeMessageActivity: RuntimeMessageActivity = {
   stageIds: {},
   channelNames: {},
+};
+
+const defaultRuntimeContentFilter: RuntimeContentFilter = {
+  logs: true,
+  telemetry: false,
 };
 
 export function useRuntimeLogs({
@@ -49,12 +56,18 @@ export function useRuntimeLogs({
 }) {
   const [runtimeState, setRuntimeState] = useState<RuntimeState>("idle");
   const [runtimeLogs, setRuntimeLogs] = useState<RuntimeLogEntry[]>([]);
+  const [runtimeEvents, setRuntimeEvents] = useState<RuntimeEvent[]>([]);
   const [runtimeStageStates, setRuntimeStageStates] = useState<RuntimeStageStates>({});
   const [runtimeMessageActivity, setRuntimeMessageActivity] = useState<RuntimeMessageActivity>(
     emptyRuntimeMessageActivity,
   );
   const [runtimeLogFilter, setRuntimeLogFilter] = useState<"all" | "selection">("all");
+  const [runtimeContentFilter, setRuntimeContentFilter] = useState<RuntimeContentFilter>(
+    defaultRuntimeContentFilter,
+  );
+  const runtimeStateRef = useRef<RuntimeState>("idle");
   const clearedAtMsRef = useRef(0);
+  const discardBackendLogsUntilNextRunRef = useRef(false);
 
   const appendRuntimeLog = useCallback(
     (stream: RuntimeLogStream, line: string, emittedAtMs?: number) => {
@@ -62,9 +75,21 @@ export function useRuntimeLogs({
         return;
       }
 
-      setRuntimeLogs((logs) =>
-        [...logs, { id: Date.now() + Math.random(), stream, line }].slice(-maxRuntimeLogs),
-      );
+      const isBackendLog = emittedAtMs !== undefined;
+      const timestampMs = emittedAtMs ?? Date.now();
+      setRuntimeLogs((logs) => {
+        const visibleLogs = logs.filter(
+          (log) => (log.timestampMs ?? log.id) > clearedAtMsRef.current,
+        );
+        if (isBackendLog && timestampMs <= clearedAtMsRef.current) {
+          return visibleLogs;
+        }
+
+        return [
+          ...visibleLogs,
+          { id: timestampMs + Math.random(), stream, line, timestampMs },
+        ].slice(-maxRuntimeLogs);
+      });
     },
     [],
   );
@@ -76,9 +101,13 @@ export function useRuntimeLogs({
   }, []);
 
   useEffect(() => {
+    runtimeStateRef.current = runtimeState;
+  }, [runtimeState]);
+
+  useEffect(() => {
     let disposed = false;
     const unlistenLog = listen<PipelineLogEvent>("pipeline://log", (event) => {
-      if (!disposed) {
+      if (!disposed && !discardBackendLogsUntilNextRunRef.current) {
         appendRuntimeLog(
           event.payload.stream,
           event.payload.line,
@@ -92,7 +121,7 @@ export function useRuntimeLogs({
       }
 
       setRuntimeState(event.payload.state === "running" ? "running" : "idle");
-      if (event.payload.message) {
+      if (event.payload.message && !discardBackendLogsUntilNextRunRef.current) {
         appendRuntimeLog("system", event.payload.message, event.payload.emitted_at_ms);
       }
     });
@@ -100,10 +129,33 @@ export function useRuntimeLogs({
       "pipeline://runtime-event",
       (event) => {
         if (!disposed) {
+          if (
+            !discardBackendLogsUntilNextRunRef.current &&
+            event.payload.emitted_at_ms > clearedAtMsRef.current
+          ) {
+            setRuntimeEvents((events) => {
+              const visibleEvents = events.filter(
+                (runtimeEvent) => runtimeEvent.timestamp_ms > clearedAtMsRef.current,
+              );
+              if (
+                event.payload.emitted_at_ms <= clearedAtMsRef.current ||
+                event.payload.event.timestamp_ms <= clearedAtMsRef.current
+              ) {
+                return visibleEvents;
+              }
+
+              return [...visibleEvents, event.payload.event].slice(-maxRuntimeEvents);
+            });
+          }
           applyRuntimeEvent(event.payload.event, setRuntimeStageStates);
-          applyRuntimeMessageEvent(event.payload.event, setRuntimeMessageActivity);
+          if (!discardBackendLogsUntilNextRunRef.current) {
+            applyRuntimeMessageEvent(event.payload.event, setRuntimeMessageActivity);
+          }
           applyPipelineRuntimeEvent(event.payload.event, setRuntimeState);
-          if (shouldShowRuntimeEventInConsole(event.payload.event)) {
+          if (
+            !discardBackendLogsUntilNextRunRef.current &&
+            shouldShowRuntimeEventInConsole(event.payload.event)
+          ) {
             appendRuntimeLog(
               "system",
               formatRuntimeEvent(event.payload.event),
@@ -137,7 +189,9 @@ export function useRuntimeLogs({
       return;
     }
 
+    discardBackendLogsUntilNextRunRef.current = false;
     setRuntimeState("starting");
+    setRuntimeEvents([]);
     setRuntimeStageStates({});
     setRuntimeMessageActivity(emptyRuntimeMessageActivity);
     onError(null);
@@ -150,6 +204,7 @@ export function useRuntimeLogs({
     } catch (caught) {
       const message = String(caught);
       setRuntimeState("error");
+      setRuntimeEvents([]);
       setRuntimeStageStates({});
       setRuntimeMessageActivity(emptyRuntimeMessageActivity);
       onError(message);
@@ -171,18 +226,34 @@ export function useRuntimeLogs({
     }
   }, [appendRuntimeLog, onError]);
 
+  const changeRuntimeLogFilter = useCallback((filter: "all" | "selection") => {
+    setRuntimeLogFilter(filter);
+    if (filter === "selection") {
+      setRuntimeContentFilter((contentFilter) => ({
+        ...contentFilter,
+        telemetry: true,
+      }));
+    }
+  }, []);
+
   return {
     runtimeState,
     runtimeLogs,
+    runtimeEvents,
     runtimeStageStates,
     runtimeMessageActivity,
     runtimeLogFilter,
-    setRuntimeLogFilter,
+    runtimeContentFilter,
+    setRuntimeLogFilter: changeRuntimeLogFilter,
+    setRuntimeContentFilter,
     startRuntime,
     stopRuntime,
     clearRuntimeLogs: () => {
       clearedAtMsRef.current = Date.now();
+      discardBackendLogsUntilNextRunRef.current =
+        runtimeStateRef.current !== "running" && runtimeStateRef.current !== "starting";
       setRuntimeLogs([]);
+      setRuntimeEvents([]);
     },
   };
 }
