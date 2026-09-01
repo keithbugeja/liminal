@@ -11,6 +11,7 @@ pub struct RuntimeEvent {
     pub kind: RuntimeEventKind,
     pub stage_id: Option<String>,
     pub processor_type: Option<String>,
+    pub channel_name: Option<String>,
     pub text: Option<String>,
 }
 
@@ -23,6 +24,8 @@ pub enum RuntimeEventKind {
     StageStarting,
     StageRunning,
     StageStopped,
+    MessageReceived,
+    MessageEmitted,
     ProcessorError,
 }
 
@@ -34,6 +37,7 @@ impl RuntimeEvent {
             kind,
             stage_id: None,
             processor_type: None,
+            channel_name: None,
             text: None,
         }
     }
@@ -45,6 +49,11 @@ impl RuntimeEvent {
 
     pub fn processor_type(mut self, processor_type: impl Into<String>) -> Self {
         self.processor_type = Some(processor_type.into());
+        self
+    }
+
+    pub fn channel(mut self, channel_name: impl Into<String>) -> Self {
+        self.channel_name = Some(channel_name.into());
         self
     }
 
@@ -73,6 +82,7 @@ mod tests {
             kind: RuntimeEventKind::StageRunning,
             stage_id: Some("sensor".to_string()),
             processor_type: Some("mqtt_sub".to_string()),
+            channel_name: Some("raw".to_string()),
             text: None,
         };
 
@@ -80,5 +90,6 @@ mod tests {
 
         assert!(json.contains("\"kind\":\"stage_running\""));
         assert!(json.contains("\"stage_id\":\"sensor\""));
+        assert!(json.contains("\"channel_name\":\"raw\""));
     }
 }

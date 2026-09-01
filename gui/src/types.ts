@@ -114,3 +114,41 @@ export type ProcessorDescriptor = {
   description: string;
   fields: FieldSpec[];
 };
+
+export type RuntimeEventKind =
+  | "pipeline_starting"
+  | "pipeline_started"
+  | "pipeline_stopped"
+  | "stage_starting"
+  | "stage_running"
+  | "stage_stopped"
+  | "message_received"
+  | "message_emitted"
+  | "processor_error";
+
+export type RuntimeEvent = {
+  id: number;
+  timestamp_ms: number;
+  kind: RuntimeEventKind;
+  stage_id: string | null;
+  processor_type: string | null;
+  channel_name: string | null;
+  text: string | null;
+};
+
+export type RuntimeStageState = "starting" | "running" | "stopped" | "error";
+
+export type RuntimeStageSnapshot = {
+  stageId: string;
+  processorType: string | null;
+  state: RuntimeStageState;
+  message: string | null;
+  updatedAtMs: number;
+};
+
+export type RuntimeStageStates = Record<string, RuntimeStageSnapshot>;
+
+export type RuntimeMessageActivity = {
+  stageIds: Record<string, number>;
+  channelNames: Record<string, number>;
+};

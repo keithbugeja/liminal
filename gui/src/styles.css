@@ -2932,6 +2932,13 @@ button {
   animation: runtime-node-pulse 1.35s ease-in-out infinite;
 }
 
+.liminal-node.runtime-error {
+  border-color: #c85f58;
+  box-shadow:
+    0 0 0 1px rgba(200, 95, 88, 0.28),
+    0 14px 35px rgba(0, 0, 0, 0.38);
+}
+
 .node-header {
   display: flex;
   align-items: center;
@@ -2944,6 +2951,37 @@ button {
 
 .node-header .diagnostic-badge {
   margin-left: auto;
+}
+
+.runtime-node-badge + .diagnostic-badge {
+  margin-left: 0;
+}
+
+.runtime-node-badge {
+  margin-left: auto;
+  padding: 2px 7px;
+  border: 1px solid rgba(141, 233, 221, 0.24);
+  border-radius: 999px;
+  background: rgba(13, 32, 33, 0.72);
+  color: #9fb7b3;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.runtime-node-badge.starting {
+  color: #f1d283;
+}
+
+.runtime-node-badge.running {
+  border-color: rgba(103, 229, 216, 0.46);
+  color: #67e5d8;
+}
+
+.runtime-node-badge.error {
+  border-color: rgba(200, 95, 88, 0.5);
+  color: #ffaaa3;
 }
 
 .liminal-node strong {

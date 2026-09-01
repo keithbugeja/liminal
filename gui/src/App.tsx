@@ -146,6 +146,8 @@ function App() {
   const {
     runtimeState,
     runtimeLogs,
+    runtimeStageStates,
+    runtimeMessageActivity,
     runtimeLogFilter,
     setRuntimeLogFilter,
     startRuntime,
@@ -1141,6 +1143,8 @@ function App() {
             loadState={loadState}
             runtimeState={runtimeState}
             runtimeLogs={runtimeLogs}
+            runtimeStageStates={runtimeStageStates}
+            runtimeMessageActivity={runtimeMessageActivity}
             runtimeLogFilter={runtimeLogFilter}
             selectedRuntimeNode={selectedRuntimeNode}
             selectedRuntimeChannelName={selectedChannelName}

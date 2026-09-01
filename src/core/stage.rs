@@ -62,11 +62,14 @@ impl Stage {
         processor: Box<dyn Processor>,
         control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
     ) -> Self {
+        let mut context = ProcessingContext::new(name.clone());
+        context.set_runtime_metadata(processor_type.clone(), noop_runtime_observer());
+
         Self {
             name: name.clone(),
             processor_type,
             processor,
-            context: ProcessingContext::new(name),
+            context,
             control_channel: control_channel,
             observer: noop_runtime_observer(),
         }
@@ -84,7 +87,9 @@ impl Stage {
     }
 
     pub fn set_observer(&mut self, observer: SharedRuntimeObserver) {
-        self.observer = observer;
+        self.observer = observer.clone();
+        self.context
+            .set_runtime_metadata(self.processor_type.clone(), observer);
     }
 
     pub async fn add_input(&mut self, name: &str, input: Subscriber<Message>) {

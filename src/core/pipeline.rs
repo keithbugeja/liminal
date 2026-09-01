@@ -287,6 +287,12 @@ impl PipelineManager {
         let (control_channel, _) = tokio::sync::broadcast::channel::<ControlMessage>(128);
         self.control_channel = Some(Arc::new(control_channel));
 
+        for stage in self.stages.values() {
+            if let Ok(mut stage) = stage.try_lock() {
+                stage.set_observer(self.observer.clone());
+            }
+        }
+
         Ok(self)
     }
 

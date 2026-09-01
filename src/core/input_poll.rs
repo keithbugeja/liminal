@@ -1,4 +1,4 @@
-use crate::core::channel::Subscriber;
+use crate::core::context::ObservedSubscriber;
 use crate::core::message::Message;
 
 use std::collections::{HashMap, HashSet};
@@ -16,7 +16,7 @@ pub async fn idle_sleep() {
     tokio::time::sleep(tokio::time::Duration::from_millis(DEFAULT_IDLE_SLEEP_MS)).await;
 }
 
-pub async fn try_one_each(inputs: &mut HashMap<String, Subscriber<Message>>) -> Vec<InputMessage> {
+pub async fn try_one_each(inputs: &mut HashMap<String, ObservedSubscriber>) -> Vec<InputMessage> {
     let input_names = sorted_input_names(inputs);
     let mut messages = Vec::new();
 
@@ -36,7 +36,7 @@ pub async fn try_one_each(inputs: &mut HashMap<String, Subscriber<Message>>) -> 
 }
 
 pub async fn drain_bounded_each(
-    inputs: &mut HashMap<String, Subscriber<Message>>,
+    inputs: &mut HashMap<String, ObservedSubscriber>,
     max_per_input: usize,
 ) -> Vec<InputMessage> {
     if max_per_input == 0 {
@@ -91,7 +91,7 @@ pub async fn drain_bounded_each(
 }
 
 pub async fn latest_each(
-    inputs: &mut HashMap<String, Subscriber<Message>>,
+    inputs: &mut HashMap<String, ObservedSubscriber>,
     max_per_input: usize,
 ) -> Vec<InputMessage> {
     if max_per_input == 0 {
@@ -125,7 +125,7 @@ pub async fn latest_each(
     messages
 }
 
-fn sorted_input_names(inputs: &HashMap<String, Subscriber<Message>>) -> Vec<String> {
+fn sorted_input_names(inputs: &HashMap<String, ObservedSubscriber>) -> Vec<String> {
     let mut input_names = inputs.keys().cloned().collect::<Vec<_>>();
     input_names.sort();
     input_names
@@ -144,8 +144,14 @@ mod tests {
         let (a_tx, a_rx) = mpsc::channel(4);
         let (b_tx, b_rx) = mpsc::channel(4);
 
-        inputs.insert("b".to_string(), Subscriber::Mpsc(b_rx));
-        inputs.insert("a".to_string(), Subscriber::Mpsc(a_rx));
+        inputs.insert(
+            "b".to_string(),
+            ObservedSubscriber::new("b".to_string(), Subscriber::Mpsc(b_rx)),
+        );
+        inputs.insert(
+            "a".to_string(),
+            ObservedSubscriber::new("a".to_string(), Subscriber::Mpsc(a_rx)),
+        );
 
         a_tx.send(Message::new("a", "a", json!(1))).await.unwrap();
         a_tx.send(Message::new("a", "a", json!(2))).await.unwrap();
@@ -168,8 +174,14 @@ mod tests {
         let (a_tx, a_rx) = mpsc::channel(8);
         let (b_tx, b_rx) = mpsc::channel(8);
 
-        inputs.insert("b".to_string(), Subscriber::Mpsc(b_rx));
-        inputs.insert("a".to_string(), Subscriber::Mpsc(a_rx));
+        inputs.insert(
+            "b".to_string(),
+            ObservedSubscriber::new("b".to_string(), Subscriber::Mpsc(b_rx)),
+        );
+        inputs.insert(
+            "a".to_string(),
+            ObservedSubscriber::new("a".to_string(), Subscriber::Mpsc(a_rx)),
+        );
 
         for value in 0..3 {
             a_tx.send(Message::new("a", "a", json!(value)))
@@ -196,7 +208,10 @@ mod tests {
         let mut inputs = HashMap::new();
         let (a_tx, a_rx) = mpsc::channel(8);
 
-        inputs.insert("a".to_string(), Subscriber::Mpsc(a_rx));
+        inputs.insert(
+            "a".to_string(),
+            ObservedSubscriber::new("a".to_string(), Subscriber::Mpsc(a_rx)),
+        );
 
         for value in 0..3 {
             a_tx.send(Message::new("a", "a", json!(value)))

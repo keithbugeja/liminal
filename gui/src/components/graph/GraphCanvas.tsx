@@ -33,6 +33,9 @@ import {
   GraphLane,
   GraphNode,
   ResolvedPipelineGraph,
+  RuntimeMessageActivity,
+  RuntimeStageSnapshot,
+  RuntimeStageStates,
 } from "../../types";
 
 type FlowNodeData = {
@@ -40,6 +43,7 @@ type FlowNodeData = {
   diagnostics: GraphDiagnostic[];
   channelDiagnosticCounts: Record<string, number>;
   runtimeActive: boolean;
+  runtimeSnapshot: RuntimeStageSnapshot | null;
   activeChannelNames: string[];
   connectionState: "valid" | "invalid" | null;
   selectedChannelName: string | null;
@@ -118,6 +122,8 @@ export function GraphCanvas({
   loadState,
   runtimeState,
   runtimeLogs,
+  runtimeStageStates,
+  runtimeMessageActivity,
   runtimeLogFilter,
   selectedRuntimeNode,
   selectedRuntimeChannelName,
@@ -143,6 +149,8 @@ export function GraphCanvas({
   loadState: "idle" | "loading" | "error";
   runtimeState: RuntimeState;
   runtimeLogs: RuntimeLogEntry[];
+  runtimeStageStates: RuntimeStageStates;
+  runtimeMessageActivity: RuntimeMessageActivity;
   runtimeLogFilter: "all" | "selection";
   selectedRuntimeNode: GraphNode | null;
   selectedRuntimeChannelName: string | null;
@@ -220,8 +228,8 @@ export function GraphCanvas({
     return map;
   }, [graph]);
   const runtimeActivity = useMemo(
-    () => runtimeActivityFromLogs(graph, runtimeLogs),
-    [graph, runtimeLogs],
+    () => runtimeActivityFromState(graph, runtimeStageStates, runtimeMessageActivity),
+    [graph, runtimeMessageActivity, runtimeStageStates],
   );
   const runtimeSelectionTokenList = useMemo(
     () => runtimeSelectionTokens(selectedRuntimeNode, selectedRuntimeChannelName),
@@ -272,6 +280,7 @@ export function GraphCanvas({
           diagnostics: diagnosticsByNode.get(node.id) ?? [],
           channelDiagnosticCounts,
           runtimeActive: runtimeActivity.nodeIds.has(node.id),
+          runtimeSnapshot: runtimeActivity.nodeStates.get(node.id) ?? null,
           activeChannelNames: [...node.input_channels, node.output_channel ?? ""].filter((channelName) =>
             runtimeActivity.channelNames.has(channelName),
           ),
@@ -855,6 +864,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     diagnostics,
     channelDiagnosticCounts,
     runtimeActive,
+    runtimeSnapshot,
     activeChannelNames,
     connectionState,
     selectedChannelName,
@@ -870,6 +880,7 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     connectionState === "valid" ? "connection-valid" : "",
     connectionState === "invalid" ? "connection-invalid" : "",
     runtimeActive ? "runtime-active" : "",
+    runtimeSnapshot?.state === "error" ? "runtime-error" : "",
     hasError ? "has-error" : "",
     hasWarning ? "has-warning" : "",
   ]
@@ -882,6 +893,14 @@ function LiminalNode({ data, selected }: NodeProps<Node<FlowNodeData>>) {
       <div className="node-header">
         <CircleDot size={14} />
         <span>{graphNode.processor_type}</span>
+        {runtimeSnapshot && (
+          <span
+            className={`runtime-node-badge ${runtimeSnapshot.state}`}
+            title={runtimeSnapshot.message ?? runtimeSnapshot.state}
+          >
+            {runtimeSnapshot.state}
+          </span>
+        )}
         {diagnosticSeverity && <DiagnosticBadge count={diagnostics.length} severity={diagnosticSeverity} />}
       </div>
       <strong>{graphNode.display_name}</strong>
@@ -1311,36 +1330,37 @@ function runtimeSelectionTokens(selectedNode: GraphNode | null, selectedChannelN
   return [...tokens].filter((token) => token.trim().length > 0);
 }
 
-function runtimeActivityFromLogs(graph: ResolvedPipelineGraph | null, logs: RuntimeLogEntry[]) {
+function runtimeActivityFromState(
+  graph: ResolvedPipelineGraph | null,
+  stageStates: RuntimeStageStates,
+  messageActivity: RuntimeMessageActivity,
+) {
   const activeNodeIds = new Set<string>();
   const activeChannelNames = new Set<string>();
-  const recentLogText = logs
-    .slice(-25)
-    .map((entry) => entry.line.toLowerCase())
-    .join("\n");
+  const nodeStates = new Map<string, RuntimeStageSnapshot>();
 
-  if (!graph || recentLogText.length === 0) {
-    return { nodeIds: activeNodeIds, channelNames: activeChannelNames };
+  if (!graph) {
+    return { nodeIds: activeNodeIds, channelNames: activeChannelNames, nodeStates };
   }
 
-  graph.channels.forEach((channel) => {
-    if (recentLogText.includes(channel.name.toLowerCase())) {
-      activeChannelNames.add(channel.name);
+  graph.nodes.forEach((node) => {
+    const stageName = stageNameForNode(node);
+    const runtimeSnapshot = stageName ? stageStates[stageName] : null;
+    if (!runtimeSnapshot) {
+      return;
     }
+
+    nodeStates.set(node.id, runtimeSnapshot);
   });
 
+  Object.keys(messageActivity.channelNames).forEach((channelName) =>
+    activeChannelNames.add(channelName),
+  );
+
   graph.nodes.forEach((node) => {
-    const nodeTokens = runtimeSelectionTokens(node, null);
-    if (nodeTokens.some((token) => recentLogText.includes(token.toLowerCase()))) {
+    const stageName = stageNameForNode(node);
+    if (stageName && messageActivity.stageIds[stageName]) {
       activeNodeIds.add(node.id);
-      node.input_channels.forEach((channelName) => {
-        if (recentLogText.includes(channelName.toLowerCase())) {
-          activeChannelNames.add(channelName);
-        }
-      });
-      if (node.output_channel && recentLogText.includes(node.output_channel.toLowerCase())) {
-        activeChannelNames.add(node.output_channel);
-      }
     }
   });
 
@@ -1351,7 +1371,28 @@ function runtimeActivityFromLogs(graph: ResolvedPipelineGraph | null, logs: Runt
     }
   });
 
-  return { nodeIds: activeNodeIds, channelNames: activeChannelNames };
+  return { nodeIds: activeNodeIds, channelNames: activeChannelNames, nodeStates };
+}
+
+function stageNameForNode(node: GraphNode) {
+  const configPathParts = node.config_path.split(".");
+  const lastConfigPathPart = configPathParts[configPathParts.length - 1];
+  if (lastConfigPathPart) {
+    return lastConfigPathPart;
+  }
+
+  if (node.id.startsWith("input:") || node.id.startsWith("output:")) {
+    const idParts = node.id.split(":");
+    return idParts[idParts.length - 1] ?? null;
+  }
+
+  const stageMarker = ".stage:";
+  const stageMarkerIndex = node.id.indexOf(stageMarker);
+  if (stageMarkerIndex >= 0) {
+    return node.id.slice(stageMarkerIndex + stageMarker.length);
+  }
+
+  return null;
 }
 
 function isTextEditingTarget(target: EventTarget | null) {
