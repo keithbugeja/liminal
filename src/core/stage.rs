@@ -2,6 +2,8 @@ use super::channel::PubSubChannel;
 use super::channel::Subscriber;
 use super::context::ProcessingContext;
 use super::message::Message;
+use super::runtime_event::{RuntimeEvent, RuntimeEventKind};
+use super::runtime_observer::{SharedRuntimeObserver, noop_runtime_observer};
 
 use crate::config::StageConfig;
 use crate::processors::processor::Processor;
@@ -31,7 +33,12 @@ pub fn create_stage(name: &str, config: StageConfig) -> Result<Box<Stage>> {
             )
         })?;
 
-    Ok(Box::new(Stage::new(name.to_string(), processor, None)))
+    Ok(Box::new(Stage::new(
+        name.to_string(),
+        processor_type,
+        processor,
+        None,
+    )))
 }
 
 #[derive(Debug, Clone)]
@@ -41,22 +48,27 @@ pub enum ControlMessage {
 
 pub struct Stage {
     name: String,
+    processor_type: String,
     processor: Box<dyn Processor>,
     context: ProcessingContext,
     control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
+    observer: SharedRuntimeObserver,
 }
 
 impl Stage {
     pub fn new(
         name: String,
+        processor_type: String,
         processor: Box<dyn Processor>,
         control_channel: Option<tokio::sync::broadcast::Receiver<ControlMessage>>,
     ) -> Self {
         Self {
             name: name.clone(),
+            processor_type,
             processor,
             context: ProcessingContext::new(name),
             control_channel: control_channel,
+            observer: noop_runtime_observer(),
         }
     }
 
@@ -69,6 +81,10 @@ impl Stage {
         control_channel: tokio::sync::broadcast::Receiver<ControlMessage>,
     ) {
         self.control_channel = Some(control_channel);
+    }
+
+    pub fn set_observer(&mut self, observer: SharedRuntimeObserver) {
+        self.observer = observer;
     }
 
     pub async fn add_input(&mut self, name: &str, input: Subscriber<Message>) {
@@ -85,6 +101,11 @@ impl Stage {
 
     pub async fn run(&mut self) -> anyhow::Result<()> {
         tracing::info!("Stage '{}' is running", self.name);
+        self.observer.emit(
+            RuntimeEvent::new(RuntimeEventKind::StageRunning)
+                .stage(self.name.clone())
+                .processor_type(self.processor_type.clone()),
+        );
 
         loop {
             tokio::select! {
@@ -109,6 +130,12 @@ impl Stage {
                     // Handle the result of the processor
                     if let Err(e) = result {
                         tracing::error!("Error in processor for stage '{}': {}", self.name, e);
+                        self.observer.emit(
+                            RuntimeEvent::new(RuntimeEventKind::ProcessorError)
+                                .stage(self.name.clone())
+                                .processor_type(self.processor_type.clone())
+                                .text(e.to_string()),
+                        );
                         return Err(e);
                     }
                 }

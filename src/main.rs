@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 
 mod config;
 mod core;
@@ -42,6 +42,19 @@ struct Cli {
     /// Print the resolved pipeline graph as JSON and exit
     #[arg(long)]
     graph_json: bool,
+
+    /// Emit structured runtime events for integrations.
+    #[arg(long, value_enum, default_value_t = RuntimeEventsMode::Off)]
+    runtime_events: RuntimeEventsMode,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
+enum RuntimeEventsMode {
+    /// Do not emit structured runtime events.
+    Off,
+
+    /// Emit JSON runtime events to stderr with a stable line prefix.
+    Jsonl,
 }
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 32)]
@@ -91,10 +104,17 @@ async fn main() {
 
     // Configuration loaded and validated
     tracing::info!("Configuration loaded and validated successfully.");
+    let runtime_observer = match cli.runtime_events {
+        RuntimeEventsMode::Off => core::runtime_observer::noop_runtime_observer(),
+        RuntimeEventsMode::Jsonl => core::runtime_observer::jsonl_runtime_observer(),
+    };
 
     // Initialize the pipeline manager
     tracing::info!("Initialising pipeline manager...");
-    let pipeline_manager = match core::pipeline::PipelineManager::new(config).build_all() {
+    let pipeline_manager = match core::pipeline::PipelineManager::new(config)
+        .with_runtime_observer(runtime_observer)
+        .build_all()
+    {
         Ok(manager) => manager,
         Err(error) => {
             tracing::error!("Pipeline build failed: {}", error);

@@ -5,11 +5,20 @@ type = "simulated"
 output = "factory_entropy_data"
 parameters = { interval_ms = 500, distribution = "uniform", min_value = 0.0, max_value = 100.0 , field_out = "chaos_factor" }
 
+[inputs.simulated]
+type = "simulated"
+output = "simulated_data"
+parameters = { interval_ms = 10000, distribution = "uniform", min_value = 0.0, max_value = 100.0 }
+
 [outputs]
 
 [outputs.console]
 type = "console"
 inputs = ["detector_data"]
+
+[outputs.console_2]
+type = "console"
+inputs = ["simulated_data"]
 
 [pipelines]
 

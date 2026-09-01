@@ -1,4 +1,6 @@
 use super::registry::ChannelRegistry;
+use super::runtime_event::{RuntimeEvent, RuntimeEventKind};
+use super::runtime_observer::{SharedRuntimeObserver, noop_runtime_observer};
 use super::stage::{ControlMessage, Stage, create_stage};
 use crate::config::{Config, StageConfig};
 use crate::core::channel::PubSubChannel;
@@ -25,6 +27,7 @@ pub struct PipelineManager {
     channel_registry: ChannelRegistry<Message>,
     control_channel: Option<Arc<tokio::sync::broadcast::Sender<ControlMessage>>>,
     stage_handles: HashMap<String, tokio::task::JoinHandle<()>>,
+    observer: SharedRuntimeObserver,
 }
 
 impl PipelineManager {
@@ -45,7 +48,14 @@ impl PipelineManager {
             channel_registry: ChannelRegistry::new(),
             control_channel: None,
             stage_handles: HashMap::new(),
+            observer: noop_runtime_observer(),
         }
+    }
+
+    /// Attach an observer that receives structured runtime events.
+    pub fn with_runtime_observer(mut self, observer: SharedRuntimeObserver) -> Self {
+        self.observer = observer;
+        self
     }
 
     /// Get all stage configurations from the config.
@@ -284,26 +294,48 @@ impl PipelineManager {
     pub async fn start_all(mut self) -> Result<Self> {
         tracing::info!("Starting all stages");
         let all_stages = self.get_all_stage_configs();
-        for (stage_name, _) in all_stages {
+        self.observer.emit(
+            RuntimeEvent::new(RuntimeEventKind::PipelineStarting)
+                .text(format!("{} stages", all_stages.len())),
+        );
+
+        for (stage_name, stage_config) in all_stages {
             if let Some(stage) = self.stages.get_mut(&stage_name) {
                 // Setup stage and wire control channel
                 {
                     let stage_clone = Arc::clone(stage);
                     let mut stage = stage_clone.lock().await;
+                    stage.set_observer(self.observer.clone());
 
                     // Attach the control channel if available
                     if let Some(control_channel) = &self.control_channel {
                         stage.attach_control_channel(control_channel.subscribe());
                     }
 
+                    self.observer.emit(
+                        RuntimeEvent::new(RuntimeEventKind::StageStarting)
+                            .stage(stage_name.clone())
+                            .processor_type(stage_config.r#type.clone()),
+                    );
+
                     // Initialise stage (and processor)
-                    stage.init().await?;
+                    if let Err(error) = stage.init().await {
+                        self.observer.emit(
+                            RuntimeEvent::new(RuntimeEventKind::ProcessorError)
+                                .stage(stage_name.clone())
+                                .processor_type(stage_config.r#type.clone())
+                                .text(error.to_string()),
+                        );
+                        return Err(error);
+                    }
                 }
 
                 // Run the stage
                 {
                     let stage_clone = Arc::clone(stage);
                     let stage_name_clone = stage_name.clone();
+                    let processor_type = stage_config.r#type.clone();
+                    let observer = self.observer.clone();
 
                     // Spawn a new task to run the stage
                     let handle = tokio::spawn(async move {
@@ -311,6 +343,11 @@ impl PipelineManager {
                         if let Err(e) = stage_lock.run().await {
                             tracing::error!("Error running stage [{}]: {}", stage_name_clone, e);
                         }
+                        observer.emit(
+                            RuntimeEvent::new(RuntimeEventKind::StageStopped)
+                                .stage(stage_name_clone)
+                                .processor_type(processor_type),
+                        );
                     });
 
                     self.stage_handles.insert(stage_name, handle);
@@ -318,12 +355,18 @@ impl PipelineManager {
             }
         }
 
+        self.observer.emit(
+            RuntimeEvent::new(RuntimeEventKind::PipelineStarted)
+                .text(format!("{} stages running", self.stage_handles.len())),
+        );
+
         // futures::future::pending().await;
         Ok(self)
     }
 
     /// Wait for all stages to complete and handle termination signals.
     pub async fn wait_for_all(self) -> Result<()> {
+        let observer = self.observer.clone();
         let control_channel_clone = self.control_channel.clone();
 
         // Listen for Ctrl+C signal
@@ -344,6 +387,45 @@ impl PipelineManager {
         // Wait for all stage handles to complete
         futures::future::join_all(handles).await;
 
+        observer.emit(RuntimeEvent::new(RuntimeEventKind::PipelineStopped));
+
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::runtime_observer::tests::RecordingRuntimeObserver;
+
+    #[tokio::test]
+    async fn emits_pipeline_lifecycle_events() {
+        let observer = Arc::new(RecordingRuntimeObserver::default());
+
+        PipelineManager::new(Config::default())
+            .with_runtime_observer(observer.clone())
+            .build_all()
+            .expect("empty pipeline builds")
+            .start_all()
+            .await
+            .expect("empty pipeline starts")
+            .wait_for_all()
+            .await
+            .expect("empty pipeline stops");
+
+        let kinds: Vec<_> = observer
+            .events()
+            .into_iter()
+            .map(|event| event.kind)
+            .collect();
+
+        assert_eq!(
+            kinds,
+            vec![
+                RuntimeEventKind::PipelineStarting,
+                RuntimeEventKind::PipelineStarted,
+                RuntimeEventKind::PipelineStopped,
+            ]
+        );
     }
 }

@@ -1,4 +1,5 @@
 use liminal::config::{load_config, Config};
+use liminal::core::runtime_observer::RUNTIME_EVENT_PREFIX;
 use liminal::processors::create_processor;
 use serde::Serialize;
 use std::fs;
@@ -25,12 +26,20 @@ struct RuntimeCommand {
 struct PipelineLogEvent {
     stream: String,
     line: String,
+    emitted_at_ms: u64,
 }
 
 #[derive(Clone, Serialize)]
 struct PipelineStateEvent {
     state: String,
     message: Option<String>,
+    emitted_at_ms: u64,
+}
+
+#[derive(Clone, Serialize)]
+struct PipelineRuntimeEvent {
+    event: serde_json::Value,
+    emitted_at_ms: u64,
 }
 
 #[tauri::command]
@@ -214,7 +223,11 @@ fn pipeline_command(config_path: &Path) -> Result<RuntimeCommand, String> {
         }
     };
 
-    command.arg("--config").arg(config_path);
+    command
+        .arg("--config")
+        .arg(config_path)
+        .arg("--runtime-events")
+        .arg("jsonl");
     command.current_dir(repo_root());
     Ok(RuntimeCommand { command, launcher })
 }
@@ -306,11 +319,35 @@ where
             let Ok(line) = line else {
                 break;
             };
+
+            if let Some(json) = line.strip_prefix(RUNTIME_EVENT_PREFIX) {
+                match serde_json::from_str::<serde_json::Value>(json) {
+                    Ok(event) => {
+                        let _ = window.emit(
+                            "pipeline://runtime-event",
+                            PipelineRuntimeEvent {
+                                event,
+                                emitted_at_ms: now_ms(),
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        emit_pipeline_log(
+                            &window,
+                            "system",
+                            format!("Failed to parse runtime event: {}", error),
+                        );
+                    }
+                }
+                continue;
+            }
+
             let _ = window.emit(
                 "pipeline://log",
                 PipelineLogEvent {
                     stream: stream.clone(),
                     line,
+                    emitted_at_ms: now_ms(),
                 },
             );
         }
@@ -323,6 +360,7 @@ fn emit_pipeline_log(window: &tauri::Window, stream: &str, line: String) {
         PipelineLogEvent {
             stream: stream.to_string(),
             line,
+            emitted_at_ms: now_ms(),
         },
     );
 }
@@ -333,8 +371,16 @@ fn emit_pipeline_state(window: &tauri::Window, state: &str, message: Option<Stri
         PipelineStateEvent {
             state: state.to_string(),
             message,
+            emitted_at_ms: now_ms(),
         },
     );
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis().try_into().unwrap_or(u64::MAX))
+        .unwrap_or(0)
 }
 
 fn terminate_process(process_id: u32) -> Result<(), String> {

@@ -4,6 +4,8 @@ pub mod input_poll;
 pub mod message;
 pub mod pipeline;
 pub mod registry;
+pub mod runtime_event;
+pub mod runtime_observer;
 pub mod stage;
 pub mod timing;
 pub mod timing_mixin;
