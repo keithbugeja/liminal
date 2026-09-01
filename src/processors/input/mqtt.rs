@@ -82,7 +82,12 @@ impl MqttInputProcessor {
 impl Processor for MqttInputProcessor {
     async fn init(&mut self) -> anyhow::Result<()> {
         let mqttoptions = self.config.connection.create_mqtt_options("liminal")?;
-        let (client, eventloop) = AsyncClient::new(mqttoptions, 10);
+        let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
+
+        self.config
+            .connection
+            .wait_for_connection_ack(&mut eventloop)
+            .await?;
 
         for topic in &self.config.topics {
             client
@@ -95,6 +100,10 @@ impl Processor for MqttInputProcessor {
                 self.config.connection.qos
             );
         }
+        self.config
+            .connection
+            .wait_for_subscription_acks(&mut eventloop, self.config.topics.len())
+            .await?;
 
         self.client = Some(client);
         self.event_loop = Some(Mutex::new(eventloop));

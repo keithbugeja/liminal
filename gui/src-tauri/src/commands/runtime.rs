@@ -1,0 +1,370 @@
+use liminal::config::{load_config, Config};
+use liminal::processors::create_processor;
+use serde::Serialize;
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex as StdMutex};
+use std::time::{SystemTime, UNIX_EPOCH};
+use tauri::{Emitter, State};
+
+use crate::paths::{repo_root, resolve_config_path};
+
+#[derive(Clone, Default)]
+pub(crate) struct PipelineRuntime {
+    process_id: Arc<StdMutex<Option<u32>>>,
+}
+
+struct RuntimeCommand {
+    command: Command,
+    launcher: String,
+}
+
+#[derive(Clone, Serialize)]
+struct PipelineLogEvent {
+    stream: String,
+    line: String,
+}
+
+#[derive(Clone, Serialize)]
+struct PipelineStateEvent {
+    state: String,
+    message: Option<String>,
+}
+
+#[tauri::command]
+pub(crate) fn start_pipeline(
+    window: tauri::Window,
+    runtime: State<'_, PipelineRuntime>,
+    path: String,
+) -> Result<(), String> {
+    let resolved_path = resolve_config_path(&path)?;
+    let config = load_config(&resolved_path)
+        .map_err(|error| format!("Failed to load '{}': {}", resolved_path.display(), error))?;
+    liminal::config::validate_config(&config)
+        .map_err(|error| format!("Configuration error: {}", error))?;
+    preflight_processors(&config)?;
+
+    {
+        let running_process = runtime
+            .process_id
+            .lock()
+            .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+        if running_process.is_some() {
+            return Err("A pipeline is already running.".to_string());
+        }
+    }
+
+    let RuntimeCommand {
+        mut command,
+        launcher,
+    } = pipeline_command(&resolved_path)?;
+    emit_pipeline_log(
+        &window,
+        "system",
+        format!(
+            "Runtime launcher: {}; config: {}",
+            launcher,
+            resolved_path.display()
+        ),
+    );
+
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Failed to start pipeline: {}", error))?;
+
+    let process_id = child.id();
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    {
+        let mut running_process = runtime
+            .process_id
+            .lock()
+            .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+        *running_process = Some(process_id);
+    }
+
+    emit_pipeline_state(
+        &window,
+        "running",
+        Some(format!("Started process {}", process_id)),
+    );
+
+    if let Some(stdout) = stdout {
+        spawn_pipeline_log_reader(window.clone(), "stdout", stdout);
+    }
+
+    if let Some(stderr) = stderr {
+        spawn_pipeline_log_reader(window.clone(), "stderr", stderr);
+    }
+
+    let runtime_process_id = runtime.process_id.clone();
+    std::thread::spawn(move || {
+        let exit_result = child.wait();
+        if let Ok(mut running_process) = runtime_process_id.lock() {
+            if *running_process == Some(process_id) {
+                *running_process = None;
+            }
+        }
+
+        let message = match exit_result {
+            Ok(status) => Some(format!("Pipeline exited with status {}", status)),
+            Err(error) => Some(format!("Failed while waiting for pipeline: {}", error)),
+        };
+        emit_pipeline_state(&window, "stopped", message);
+    });
+
+    Ok(())
+}
+
+pub(crate) fn preflight_processors(config: &Config) -> Result<(), String> {
+    for (name, stage) in &config.inputs {
+        create_processor(&stage.r#type, stage.clone()).map_err(|error| {
+            format!(
+                "Runtime preflight failed for input '{}': processor '{}' could not be created: {}",
+                name, stage.r#type, error
+            )
+        })?;
+    }
+
+    for (pipeline_name, pipeline) in &config.pipelines {
+        for (stage_name, stage) in &pipeline.stages {
+            create_processor(&stage.r#type, stage.clone()).map_err(|error| {
+                format!(
+                    "Runtime preflight failed for stage '{}.{}': processor '{}' could not be created: {}",
+                    pipeline_name, stage_name, stage.r#type, error
+                )
+            })?;
+        }
+    }
+
+    for (name, stage) in &config.outputs {
+        create_processor(&stage.r#type, stage.clone()).map_err(|error| {
+            format!(
+                "Runtime preflight failed for output '{}': processor '{}' could not be created: {}",
+                name, stage.r#type, error
+            )
+        })?;
+    }
+
+    Ok(())
+}
+
+#[tauri::command]
+pub(crate) fn stop_pipeline(runtime: State<'_, PipelineRuntime>) -> Result<(), String> {
+    let process_id = {
+        let mut running_process = runtime
+            .process_id
+            .lock()
+            .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+        running_process.take()
+    };
+
+    let Some(process_id) = process_id else {
+        return Ok(());
+    };
+
+    terminate_process(process_id)
+}
+
+#[tauri::command]
+pub(crate) fn pipeline_runtime_state(
+    runtime: State<'_, PipelineRuntime>,
+) -> Result<String, String> {
+    let running_process = runtime
+        .process_id
+        .lock()
+        .map_err(|_| "Pipeline runtime lock is poisoned".to_string())?;
+    Ok(if running_process.is_some() {
+        "running".to_string()
+    } else {
+        "idle".to_string()
+    })
+}
+
+fn pipeline_command(config_path: &Path) -> Result<RuntimeCommand, String> {
+    let (mut command, launcher) = if let Ok(binary_path) = std::env::var("LIMINAL_BIN") {
+        let command = Command::new(&binary_path);
+        (command, format!("LIMINAL_BIN ({binary_path})"))
+    } else if should_launch_runtime_with_cargo() {
+        let runtime_binary = prepare_cargo_runtime_binary()?;
+        let command = Command::new(&runtime_binary);
+        (
+            command,
+            format!("cargo-built binary ({})", runtime_binary.display()),
+        )
+    } else {
+        let candidate = repo_root()
+            .join("target")
+            .join("debug")
+            .join(format!("liminal{}", std::env::consts::EXE_SUFFIX));
+
+        if candidate.exists() {
+            let command = Command::new(&candidate);
+            (command, format!("debug binary ({})", candidate.display()))
+        } else {
+            return Err(format!(
+                "No pipeline runtime binary found at '{}' and cargo is not available",
+                candidate.display()
+            ));
+        }
+    };
+
+    command.arg("--config").arg(config_path);
+    command.current_dir(repo_root());
+    Ok(RuntimeCommand { command, launcher })
+}
+
+fn should_launch_runtime_with_cargo() -> bool {
+    repo_root().join("Cargo.toml").is_file()
+        && Command::new("cargo")
+            .arg("--version")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+}
+
+fn prepare_cargo_runtime_binary() -> Result<PathBuf, String> {
+    let build_target_dir = repo_root().join("target").join("gui-runtime-build");
+    let output = Command::new("cargo")
+        .arg("build")
+        .arg("--quiet")
+        .arg("--manifest-path")
+        .arg(repo_root().join("Cargo.toml"))
+        .arg("--target-dir")
+        .arg(&build_target_dir)
+        .current_dir(repo_root())
+        .output()
+        .map_err(|error| format!("Failed to build pipeline runtime: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        return Err(format!(
+            "Pipeline runtime build failed: {}{}",
+            stderr.trim(),
+            if stdout.trim().is_empty() {
+                String::new()
+            } else {
+                format!("\n{}", stdout.trim())
+            }
+        ));
+    }
+
+    let built_binary = build_target_dir
+        .join("debug")
+        .join(format!("liminal{}", std::env::consts::EXE_SUFFIX));
+    if !built_binary.is_file() {
+        return Err(format!(
+            "Pipeline runtime build did not produce '{}'",
+            built_binary.display()
+        ));
+    }
+
+    let run_dir = repo_root().join("target").join("gui-runtime-runs");
+    fs::create_dir_all(&run_dir)
+        .map_err(|error| format!("Failed to create '{}': {}", run_dir.display(), error))?;
+    let runtime_binary = run_dir.join(format!(
+        "liminal-{}-{}{}",
+        std::process::id(),
+        runtime_binary_suffix(),
+        std::env::consts::EXE_SUFFIX
+    ));
+
+    fs::copy(&built_binary, &runtime_binary).map_err(|error| {
+        format!(
+            "Failed to copy runtime binary from '{}' to '{}': {}",
+            built_binary.display(),
+            runtime_binary.display(),
+            error
+        )
+    })?;
+
+    Ok(runtime_binary)
+}
+
+fn runtime_binary_suffix() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0)
+}
+
+fn spawn_pipeline_log_reader<R>(window: tauri::Window, stream: &str, reader: R)
+where
+    R: std::io::Read + Send + 'static,
+{
+    let stream = stream.to_string();
+    std::thread::spawn(move || {
+        for line in BufReader::new(reader).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            let _ = window.emit(
+                "pipeline://log",
+                PipelineLogEvent {
+                    stream: stream.clone(),
+                    line,
+                },
+            );
+        }
+    });
+}
+
+fn emit_pipeline_log(window: &tauri::Window, stream: &str, line: String) {
+    let _ = window.emit(
+        "pipeline://log",
+        PipelineLogEvent {
+            stream: stream.to_string(),
+            line,
+        },
+    );
+}
+
+fn emit_pipeline_state(window: &tauri::Window, state: &str, message: Option<String>) {
+    let _ = window.emit(
+        "pipeline://state",
+        PipelineStateEvent {
+            state: state.to_string(),
+            message,
+        },
+    );
+}
+
+fn terminate_process(process_id: u32) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let status = Command::new("taskkill")
+            .arg("/PID")
+            .arg(process_id.to_string())
+            .arg("/T")
+            .arg("/F")
+            .status()
+            .map_err(|error| format!("Failed to stop pipeline: {}", error))?;
+
+        if !status.success() {
+            return Err(format!("Failed to stop pipeline process {}", process_id));
+        }
+    }
+
+    #[cfg(not(windows))]
+    {
+        let status = Command::new("kill")
+            .arg("-TERM")
+            .arg(process_id.to_string())
+            .status()
+            .map_err(|error| format!("Failed to stop pipeline: {}", error))?;
+
+        if !status.success() {
+            return Err(format!("Failed to stop pipeline process {}", process_id));
+        }
+    }
+
+    Ok(())
+}

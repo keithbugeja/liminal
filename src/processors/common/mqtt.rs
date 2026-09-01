@@ -1,7 +1,10 @@
 use crate::config::{defaulted_param, optional_param};
 use anyhow::Result;
-use rumqttc::{MqttOptions, QoS};
+use rumqttc::{Event, EventLoop, MqttOptions, Packet, QoS};
 use std::collections::HashMap;
+use tokio::time::{Duration, Instant, timeout};
+
+const MQTT_READY_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// Common MQTT configuration shared between input and output processors
 #[derive(Debug, Clone)]
@@ -100,6 +103,72 @@ impl MqttConnectionConfig {
 
         Ok(mqttoptions)
     }
+
+    pub async fn wait_for_connection_ack(&self, eventloop: &mut EventLoop) -> Result<()> {
+        wait_for_mqtt_packet(&self.broker_url, eventloop, "CONNACK", |event| {
+            matches!(event, Event::Incoming(Packet::ConnAck(_)))
+        })
+        .await
+    }
+
+    pub async fn wait_for_subscription_acks(
+        &self,
+        eventloop: &mut EventLoop,
+        expected_acks: usize,
+    ) -> Result<()> {
+        for _ in 0..expected_acks {
+            wait_for_mqtt_packet(&self.broker_url, eventloop, "SUBACK", |event| {
+                matches!(event, Event::Incoming(Packet::SubAck(_)))
+            })
+            .await?;
+        }
+
+        Ok(())
+    }
+}
+
+async fn wait_for_mqtt_packet(
+    broker_url: &str,
+    eventloop: &mut EventLoop,
+    label: &str,
+    is_expected: impl Fn(&Event) -> bool,
+) -> Result<()> {
+    let deadline = Instant::now() + MQTT_READY_TIMEOUT;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow::anyhow!(
+                "MQTT broker '{}' did not send {} within {:?}",
+                broker_url,
+                label,
+                MQTT_READY_TIMEOUT
+            ));
+        }
+
+        let event = timeout(remaining, eventloop.poll())
+            .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "MQTT broker '{}' did not send {} within {:?}",
+                    broker_url,
+                    label,
+                    MQTT_READY_TIMEOUT
+                )
+            })?
+            .map_err(|error| {
+                anyhow::anyhow!(
+                    "MQTT broker '{}' failed before {}: {}",
+                    broker_url,
+                    label,
+                    error
+                )
+            })?;
+
+        if is_expected(&event) {
+            return Ok(());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -124,5 +193,28 @@ mod tests {
         let error = config.validate().expect_err("qos range is rejected");
 
         assert!(error.to_string().contains("QoS"));
+    }
+
+    #[tokio::test]
+    async fn mqtt_connection_ack_reports_refused_connection() {
+        let config = MqttConnectionConfig {
+            broker_url: "mqtt://127.0.0.1:0".to_string(),
+            client_id: None,
+            qos: 0,
+            clean_session: true,
+            username: None,
+            password: None,
+        };
+        let mqttoptions = config
+            .create_mqtt_options("test")
+            .expect("MQTT options can be created");
+        let (_client, mut eventloop) = rumqttc::AsyncClient::new(mqttoptions, 10);
+
+        let error = config
+            .wait_for_connection_ack(&mut eventloop)
+            .await
+            .expect_err("port zero is not a reachable MQTT broker");
+
+        assert!(error.to_string().contains("MQTT broker"));
     }
 }

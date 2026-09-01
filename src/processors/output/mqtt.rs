@@ -103,6 +103,10 @@ impl Processor for MqttOutputProcessor {
 
         // Create client and event loop
         let (client, mut eventloop) = AsyncClient::new(mqttoptions, 10);
+        self.config
+            .connection
+            .wait_for_connection_ack(&mut eventloop)
+            .await?;
 
         // Spawn the event loop in a background task to handle MQTT connection
         tokio::spawn(async move {
